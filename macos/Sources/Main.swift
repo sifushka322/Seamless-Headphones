@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var window: NSWindow!
     var item: NSStatusItem!
     var model: AppModel!
@@ -18,12 +18,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         edit.addItem(withTitle: "Копировать", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: "Выделить всё", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit; mainMenu.addItem(editItem); NSApp.mainMenu = mainMenu
-        let view = NSHostingView(rootView: Dashboard(model: model))
+        let view = NSHostingView(rootView: Dashboard(model: model, initialPage: args.contains("--devices") && model.demo ? .devices : args.contains("--settings") && model.demo ? .settings : .overview))
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 790), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Seamless Headphones"; window.contentView = view; window.center(); window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Seamless Headphones")
+        item.button?.image = NSImage(systemSymbolName: "airpods.pro", accessibilityDescription: "Seamless Headphones")
         let menu = NSMenu()
         for (title, action) in [("Открыть Seamless Headphones", #selector(show)), ("Забрать на Mac", #selector(toMac)), ("Передать на телефон", #selector(toPhone)), ("Завершить", #selector(quit))] {
             let entry = NSMenuItem(title: title, action: action, keyEquivalent: ""); entry.target = self; menu.addItem(entry)
@@ -39,6 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             }
         }
+    }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toMac) || menuItem.action == #selector(toPhone) {
+            return model.trusted && !model.busy && !model.held && !model.selected.isEmpty && !model.selectionMismatch
+        }
+        return true
     }
     @objc func show() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     @objc func toMac() { model.request("mac") }

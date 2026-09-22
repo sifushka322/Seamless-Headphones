@@ -3,15 +3,15 @@ package app.systemresponse
 import org.json.JSONObject
 
 data class ActivityState(val available: Boolean = false, val playing: Boolean = false, val call: Boolean = false,
-    val held: Boolean = false, val automation: Boolean = false, val event: Int = 0, val source: String = "", val connected: Boolean = false) {
+    val held: Boolean = false, val automation: Boolean = false, val event: Int = 0, val source: String = "", val connected: Boolean = false, val guardReason: String? = null) {
     fun json(): String = JSONObject().put("available", available).put("playing", playing).put("call", call).put("held", held)
-        .put("automation", automation).put("event", event).put("source", source).put("connected", connected).toString()
+        .put("automation", automation).put("event", event).put("source", source).put("connected", connected).put("guardReason", guardReason ?: JSONObject.NULL).toString()
     companion object {
         fun parse(text: String): ActivityState {
             require(text.length < 1600)
             val o = JSONObject(text)
             return ActivityState(o.getBoolean("available"), o.getBoolean("playing"), o.getBoolean("call"), o.getBoolean("held"),
-                o.getBoolean("automation"), o.getInt("event"), o.getString("source"), o.getBoolean("connected")).also {
+                o.getBoolean("automation"), o.getInt("event"), o.getString("source"), o.getBoolean("connected"), if (o.isNull("guardReason")) null else o.optString("guardReason").take(180)).also {
                 require(it.event >= 0 && it.source.length < 200)
             }
         }

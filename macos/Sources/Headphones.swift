@@ -71,10 +71,15 @@ final class Headphones {
     private func begin() -> UUID { lock.lock(); defer { lock.unlock() }; operation = UUID(); return operation }
     private func current(_ token: UUID) -> Bool { lock.lock(); defer { lock.unlock() }; return operation == token }
     static func paired() -> [Headset] {
-        (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? []).compactMap {
+        var seen = Set<String>()
+        return (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? []).compactMap {
             guard let address = $0.addressString else { return nil }
             // Bluetooth major class 4 = audio/video. Avoid keyboards/mice in the picker.
             guard $0.deviceClassMajor == 4 else { return nil }
+            // macOS can return multiple records for the same Bluetooth address.
+            // Keep the original address for saved selections; names are not unique identities.
+            let key = AudioDevices.normalized(address)
+            guard key.count == 12, seen.insert(key).inserted else { return nil }
             return Headset(id: address, name: $0.name ?? address)
         }.sorted { $0.name < $1.name }
     }
@@ -109,7 +114,7 @@ final class Headphones {
             }
             // Explicit short HCI timeout. Baseband success alone is never reported as audio success.
             if !device.isConnected() { _ = device.openConnection(nil, withPageTimeout: 8000, authenticationRequired: false) }
-            DispatchQueue.main.async { self.waitForOutput(address: address, token: token, remaining: 20, completion: completion) }
+            DispatchQueue.main.async { self.waitForOutput(address: address, token: token, remaining: 40, completion: completion) }
         }
     }
     private func waitForOutput(address: String, token: UUID, remaining: Int, completion: @escaping (Bool, String) -> Void) {
@@ -119,7 +124,7 @@ final class Headphones {
             completion(true, "Наушники выбраны системным выходом Mac"); return
         }
         guard remaining > 0 else { completion(false, "macOS не предоставила аудиовыход. Подключи наушники в настройках Bluetooth"); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             self?.waitForOutput(address: address, token: token, remaining: remaining - 1, completion: completion)
         }
     }

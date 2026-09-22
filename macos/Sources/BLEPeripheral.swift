@@ -7,6 +7,8 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
     static let notifyID = CBUUID(string: "845E1002-7F5A-4CB5-9AE8-2DC18A64BB01")
     var onPacket: (Packet) -> Void = { _ in }
     var onStatus: (String, Bool) -> Void = { _, _ in }
+    var onTrace: (String) -> Void = { _ in }
+    private var packets = PacketQueue()
     var onDisconnect: () -> Void = {}
     private var manager: CBPeripheralManager!
     private var notifyCharacteristic: CBMutableCharacteristic!
@@ -30,7 +32,7 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
     private func reset() {
         let hadPeer = central != nil
         generation = UUID(); central = nil; wire = nil; authenticated = false
-        pending.removeAll(); buffer = FrameBuffer()
+        pending.removeAll(); packets.reset(); buffer = FrameBuffer()
         if hadPeer { onDisconnect() }
     }
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
@@ -54,10 +56,11 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
         guard self.central == nil, let secret else { return }
-        self.central = central; authenticated = false; buffer = FrameBuffer(); pending.removeAll()
+        onTrace("BLE subscribed payload=\(central.maximumUpdateValueLength)")
+        self.central = central; authenticated = false; packets.reset(); buffer = FrameBuffer(); pending.removeAll()
         let session = UUID().uuidString
         wire = SecureWire(secret: secret, session: session, role: "mac")
-        enqueue(Data("HELLO|\(session)\n".utf8)); onStatus("Проверяем доверие…", false)
+        enqueue(Data("HELLO|\(session)\n".utf8)); flush(); onStatus("Проверяем доверие…", false)
         let token = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
             guard let self, self.generation == token, !self.authenticated else { return }
@@ -83,6 +86,7 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
                 for frame in try buffer.append(value) {
                     guard let wire else { throw WireError.invalid }
                     let packet = try wire.decode(frame)
+                    onTrace("RX type=\(packet.type) tx=\(packet.id) bytes=\(frame.utf8.count)")
                     if !authenticated {
                         guard packet.type == "hello" else { throw WireError.authentication }
                         authenticated = true; send(Packet(type: "hello")); onStatus("Телефон • доверенная связь", true)
@@ -91,24 +95,33 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
                 peripheral.respond(to: request, withResult: .success)
             } catch {
                 peripheral.respond(to: request, withResult: .unlikelyError)
+                onTrace("BLE decode/write rejected: \(error)")
                 onStatus("Ошибка проверки BLE-пакета", authenticated)
             }
         }
     }
     func send(_ packet: Packet) {
-        guard authenticated, let wire, let data = try? wire.encode(packet) else { return }
-        enqueue(data)
+        guard authenticated else { return }
+        guard packets.append(packet) else { onTrace("BLE command queue overflow"); publish(); return }
+        flush()
     }
     private func enqueue(_ data: Data) {
         guard let central else { return }
         let size = max(1, min(central.maximumUpdateValueLength, 180))
         for offset in stride(from: 0, to: data.count, by: size) { pending.append(data.subdata(in: offset..<min(offset + size, data.count))) }
-        if pending.count > 512 { publish(); return }
-        flush()
     }
     private func flush() {
         guard let central, let characteristic = notifyCharacteristic else { return }
-        while let next = pending.first {
+        while true {
+            if pending.isEmpty {
+                guard let packet = packets.next(), let wire else { return }
+                do {
+                    let data = try wire.encode(packet)
+                    onTrace("TX type=\(packet.type) tx=\(packet.id) bytes=\(data.count) queued=\(packets.count)")
+                    enqueue(data)
+                } catch { onTrace("BLE encode failed"); publish(); return }
+            }
+            guard let next = pending.first else { return }
             guard manager.updateValue(next, for: characteristic, onSubscribedCentrals: [central]) else { return }
             pending.removeFirst()
         }

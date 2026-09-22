@@ -9,6 +9,7 @@ struct ActivityState: Codable, Equatable {
     var event = 0
     var source = ""
     var connected = false
+    var guardReason: String? = nil
 }
 
 /// Debounces starts, not continuous playback. Suppression consumes starts instead of postponing them.
@@ -42,10 +43,10 @@ struct AutoPolicy {
     private(set) var blockedUntil: Double = 0
     private(set) var suspended = false
     mutating func resetSession() { macEvent = nil; phoneEvent = nil }
-    mutating func manual(now: Double) { blockedUntil = now + 120 }
+    mutating func manual(now: Double, duration: Double = 15) { blockedUntil = now + max(0, duration) }
     mutating func completed(now: Double, cooldown: Double) { blockedUntil = max(blockedUntil, now + cooldown) }
     mutating func failed() { suspended = true }
-    mutating func resume() { suspended = false; resetSession() }
+    mutating func resume() { suspended = false; blockedUntil = 0; resetSession() }
     mutating func evaluate(mac: ActivityState, phone: ActivityState, fresh: Bool, linked: Bool,
                            busy: Bool, owner: String, idleOnly: Bool, now: Double) -> AutoDecision {
         let macStarted = macEvent != nil && mac.event > macEvent!
@@ -56,7 +57,8 @@ struct AutoPolicy {
         if !mac.automation || !phone.automation { return AutoDecision(reason: "Включи автоматизацию на обоих устройствах") }
         if suspended { return AutoDecision(reason: "Авто на паузе после ошибки · требуется возобновление") }
         if !mac.available || !phone.available { return AutoDecision(reason: "Настрой доступ к воспроизведению и защите звонков") }
-        if mac.call || phone.call { return AutoDecision(reason: "Защита разговора или микрофона") }
+        if mac.call { return AutoDecision(reason: "Mac: " + (mac.guardReason ?? "используется микрофон")) }
+        if phone.call { return AutoDecision(reason: "Android: " + (phone.guardReason ?? "сигнал разговора или микрофона")) }
         if mac.held || phone.held { return AutoDecision(reason: "На одном из устройств включено удержание") }
         if busy { return AutoDecision(reason: "Передача уже выполняется") }
         if now < blockedUntil { return AutoDecision(reason: "Пауза после переключения · \(Int(ceil(blockedUntil - now))) с") }
@@ -66,6 +68,6 @@ struct AutoPolicy {
             if idleOnly && source.playing { return AutoDecision(reason: "Источник ещё играет · ждём новое воспроизведение после паузы") }
             return AutoDecision(target: target, reason: "Новое воспроизведение: \(destination.source)")
         }
-        return AutoDecision(reason: "Готово · ждём новое воспроизведение")
+        return AutoDecision(reason: "Готово · запусти музыку заново в разрешённом приложении")
     }
 }

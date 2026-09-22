@@ -8,3 +8,5 @@ swiftc -swift-version 5 -sdk "$SDK" -module-cache-path "$PWD/.build/modules" mac
 .build/core-tests
 swiftc -swift-version 5 -sdk "$SDK" -module-cache-path "$PWD/.build/modules" macos/Sources/AutoPolicy.swift macos/Tests/AutoTests.swift -o .build/auto-tests
 .build/auto-tests
+swiftc -swift-version 5 -sdk "$SDK" -module-cache-path "$PWD/.build/modules" macos/Sources/Wire.swift macos/Sources/PacketQueue.swift macos/Sources/PairingCode.swift macos/Tests/TransportTests.swift -framework AppKit -framework CoreImage -framework Vision -o .build/transport-tests
+.build/transport-tests

@@ -13,7 +13,7 @@ import java.util.UUID
 @SuppressLint("MissingPermission")
 class BleClient(private val context: Context, private val secret: ByteArray,
     private val status: (String, Boolean) -> Unit, private val received: (Packet) -> Unit,
-    private val lost: () -> Unit) {
+    private val lost: () -> Unit, private val trace: (String) -> Unit = {}) {
     companion object {
         val SERVICE: UUID = UUID.fromString("845E1000-7F5A-4CB5-9AE8-2DC18A64BB01")
         val WRITE: UUID = UUID.fromString("845E1001-7F5A-4CB5-9AE8-2DC18A64BB01")
@@ -27,6 +27,10 @@ class BleClient(private val context: Context, private val secret: ByteArray,
     private var buffer = FrameBuffer()
     private var wire: SecureWire? = null
     private val writes = ArrayDeque<ByteArray>()
+    private val packets = PacketQueue()
+    private var payloadSize = 20
+    private var discovering = false
+    private var writeStarted = 0L
     private var writing = false
     private var scanning = false
     private var lastSeen = 0L
@@ -44,7 +48,18 @@ class BleClient(private val context: Context, private val secret: ByteArray,
         override fun onConnectionStateChange(g: BluetoothGatt, code: Int, state: Int) { handler.post {
             if (g !== gatt) return@post
             if (code != BluetoothGatt.GATT_SUCCESS || state == BluetoothProfile.STATE_DISCONNECTED) { fail("BLE-связь с Mac прервана"); return@post }
-            if (state == BluetoothProfile.STATE_CONNECTED && !g.discoverServices()) fail("Не удалось прочитать BLE-сервис")
+            trace("GATT state=$state status=$code")
+            if (state == BluetoothProfile.STATE_CONNECTED) {
+                g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                if (!g.requestMtu(185)) discover(g)
+                else handler.postDelayed({ if (g === gatt) discover(g) }, 2000)
+            }
+        } }
+        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, code: Int) { handler.post {
+            if (g !== gatt) return@post
+            if (code == BluetoothGatt.GATT_SUCCESS) payloadSize = (mtu - 3).coerceIn(20, 180)
+            trace("GATT MTU=$mtu status=$code payload=$payloadSize")
+            discover(g)
         } }
         override fun onServicesDiscovered(g: BluetoothGatt, code: Int) { handler.post {
             if (g !== gatt) return@post
@@ -72,8 +87,14 @@ class BleClient(private val context: Context, private val secret: ByteArray,
             if (g !== gatt) return@post
             if (code != BluetoothGatt.GATT_SUCCESS) { fail("Mac отклонил BLE-пакет"); return@post }
             if (writes.isNotEmpty()) writes.removeFirst()
+            if (writes.isEmpty()) trace("TX frame complete elapsedMs=${android.os.SystemClock.elapsedRealtime() - writeStarted} queued=${packets.size}")
             writing = false; flush()
         } }
+    }
+    private fun discover(g: BluetoothGatt) {
+        if (discovering) return
+        discovering = true
+        if (!g.discoverServices()) fail("Не удалось прочитать BLE-сервис")
     }
     fun start() {
         stop()
@@ -87,19 +108,20 @@ class BleClient(private val context: Context, private val secret: ByteArray,
     }
     private fun stopScan() { if (scanning) { runCatching { adapter?.bluetoothLeScanner?.stopScan(scanner) }; scanning = false } }
     fun stop() {
-        generation++; stopScan(); trusted = false; wire = null; buffer = FrameBuffer(); writes.clear(); writing = false; write = null
+        generation++; stopScan(); trusted = false; wire = null; buffer = FrameBuffer(); writes.clear(); packets.clear(); payloadSize = 20; discovering = false; writing = false; write = null
         val old = gatt; gatt = null; runCatching { old?.disconnect(); old?.close() }
     }
-    private fun fail(reason: String) { stop(); status(reason, false); lost() }
+    private fun fail(reason: String) { trace("BLE failure: $reason"); stop(); status(reason, false); lost() }
     private fun receiveBytes(value: ByteArray) {
         try {
             for (frame in buffer.append(value)) {
                 if (frame.startsWith("HELLO|")) {
                     require(wire == null && !trusted)
                     val session = frame.substringAfter('|'); require(UUID.fromString(session).toString().equals(session, true))
-                    wire = SecureWire(secret, session, "android"); enqueue(wire!!.encode(Packet("hello")))
+                    wire = SecureWire(secret, session, "android"); packets.add(Packet("hello")); flush()
                 } else {
                     val packet = wire?.decode(frame) ?: error("No session")
+                    trace("RX type=${packet.type} tx=${packet.id} bytes=${frame.length}")
                     if (!trusted) {
                         require(packet.type == "hello"); trusted = true; status("Mac • доверенная связь", true); lastSeen = System.currentTimeMillis(); heartbeat(generation)
                     } else {
@@ -110,16 +132,21 @@ class BleClient(private val context: Context, private val secret: ByteArray,
             }
         } catch (_: Exception) { fail("Проверка доверия не пройдена. Проверь ключ с Mac") }
     }
-    fun send(packet: Packet) { if (trusted) { runCatching { enqueue(wire!!.encode(packet)) }.onFailure { fail("Ошибка BLE-протокола") } } }
-    private fun enqueue(data: ByteArray) {
-        // Minimum ATT MTU 23 guarantees 20 payload bytes; no MTU race during subscription.
-        data.asList().chunked(20).forEach { writes.add(it.toByteArray()) }
-        if (writes.size > 512) { fail("Очередь BLE переполнена"); return }
+    fun send(packet: Packet) {
+        if (!trusted) return
+        if (!packets.add(packet)) { fail("Очередь BLE-команд переполнена"); return }
         flush()
     }
     private fun flush() {
-        if (writing || writes.isEmpty()) return
+        if (writing) return
         val characteristic = write ?: return
+        if (writes.isEmpty()) {
+            val packet = packets.next() ?: return
+            val data = runCatching { wire!!.encode(packet) }.getOrElse { fail("Ошибка BLE-протокола"); return }
+            data.asList().chunked(payloadSize).forEach { writes.add(it.toByteArray()) }
+            writeStarted = android.os.SystemClock.elapsedRealtime()
+            trace("TX type=${packet.type} tx=${packet.id} bytes=${data.size} chunks=${writes.size} queued=${packets.size}")
+        }
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         characteristic.value = writes.first
         writing = true

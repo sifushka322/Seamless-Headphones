@@ -64,6 +64,20 @@ import Foundation
         check(edge.event == 1, "suppressed starts never become delayed takeovers")
         edge.reset(); edge.sample(["VLC"], now: 40, delay: 2, suppress: false)
         check(edge.event == 1, "reconnection resets baseline without resetting counter")
+        mac.available = true; phone.automation = true
+        p.manual(now: 400)
+        check(p.blockedUntil == 415, "manual priority defaults to 15 seconds, not two minutes")
+        p.completed(now: 402, cooldown: 20)
+        p.resume()
+        check(p.blockedUntil == 0, "explicit resume clears cooldown and manual priority")
+        check(decision(403).target == nil, "reset never replays current playback")
+        phone.event += 1
+        check(decision(404).target == "android", "new playback works immediately after reset")
+        phone.call = true; phone.guardReason = "Активен голосовой аудиопоток Android"; mac.event += 1
+        check(decision(405).reason.contains("голосовой аудиопоток"), "precise remote call reason is visible")
+        check(decision(406).target == nil, "reset does not bypass a call")
+        let legacy = "{\"available\":true,\"playing\":false,\"call\":false,\"held\":false,\"automation\":true,\"event\":0,\"source\":\"\",\"connected\":false}"
+        check((try? JSONDecoder().decode(ActivityState.self, from: Data(legacy.utf8)))?.guardReason == nil, "legacy activity schema remains readable")
         print("\(count) automation checks passed")
     }
 }

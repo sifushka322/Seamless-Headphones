@@ -1,7 +1,9 @@
 package app.systemresponse
 
 import android.Manifest
-import android.app.Activity
+import androidx.activity.ComponentActivity
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import android.content.*
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -13,7 +15,7 @@ import android.text.InputType
 import android.view.*
 import android.widget.*
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
     private val appearance by lazy { getSharedPreferences("appearance", MODE_PRIVATE) }
     private val settingsPrefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
     private val dark get() = when (appearance.getString("theme", "system")) { "dark" -> true; "light" -> false; else -> resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES }
@@ -35,6 +37,32 @@ class MainActivity : Activity() {
     private var mediaPermission: TextView? = null
     private var callPermission: TextView? = null
     private var logView: TextView? = null
+    private var debugView: TextView? = null
+    private var selectionView: TextView? = null
+    private var matchButton: Button? = null
+    private var resumeButton: Button? = null
+    private val qrScanner = registerForActivityResult(ScanContract()) { result ->
+        result.contents?.let { raw ->
+            val code = runCatching { PairingCode.parse(raw) }.getOrNull()
+            if (code == null) toast("Это не QR-код связи Seamless Headphones")
+            else confirmPairing(code)
+        }
+    }
+    private fun confirmPairing(code: PairingCode) {
+        if (service?.running == true) { toast("Сначала останови связь с Mac"); return }
+        val headset = if (bluetoothGranted()) runCatching { service?.paired()?.firstOrNull { Headphones.normalize(it.address) == Headphones.normalize(code.device) } }.getOrNull() else null
+        val headsetName = try { headset?.name ?: "наушники" } catch (_: SecurityException) { "наушники" }
+        val message = if (headset != null) "Сохранить ключ Mac и выбрать $headsetName?" else "Сохранить ключ этого Mac? Наушники выбери отдельно в разделе «Устройства»."
+        android.app.AlertDialog.Builder(this).setTitle("Связать с этим Mac?").setMessage(message)
+            .setNegativeButton("Отмена", null).setPositiveButton("Сохранить") { _, _ ->
+                if (service?.running == true) { toast("Сначала останови связь"); return@setPositiveButton }
+                try {
+                    SecretStore(this).save(code.key)
+                    if (headset != null) service?.address = headset.address
+                    toast("Ключ сохранён. Нажми «Найти Mac»"); render()
+                } catch (_: Exception) { toast("Не удалось сохранить ключ в защищённом хранилище") }
+            }.show()
+    }
     private var metrics: TextView? = null
     private var ownerText: TextView? = null
     private var connect: Button? = null
@@ -67,7 +95,7 @@ class MainActivity : Activity() {
         parent.addView(view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) }); action(view); return view
     }
     private fun button(label: String, primary: Boolean = false, action: () -> Unit) = Button(this).apply {
-        text = label; isAllCaps = false; textSize = 14f; minHeight = dp(48); minimumHeight = dp(48)
+        text = label; isAllCaps = false; textSize = 14f; minWidth = 0; minimumWidth = 0; minHeight = dp(48); minimumHeight = dp(48)
         setTextColor(if (primary) if (dark) Color.parseColor("#102921") else Color.WHITE else accent)
         background = shape(if (primary) accent else tint(accent, 22), 13)
         setPadding(dp(14), dp(8), dp(14), dp(8))
@@ -92,7 +120,7 @@ class MainActivity : Activity() {
         val root = stack().apply { setBackgroundColor(canvas) }
         root.setOnApplyWindowInsetsListener { view, insets -> val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime()); view.setPadding(bars.left, bars.top, bars.right, bars.bottom); insets }
         scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
-        content = stack(22); scroll.addView(content); root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        content = stack(18); scroll.addView(content); root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         navigation = LinearLayout(this).apply { setPadding(dp(8), dp(9), dp(8), dp(9)); background = shape(surface, 0) }
         root.addView(navigation); setContentView(root)
         window.insetsController?.setSystemBarsAppearance(if (dark) 0 else WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
@@ -103,22 +131,34 @@ class MainActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) { outState.putInt("page", page); super.onSaveInstanceState(outState) }
     private fun render() {
         content.removeAllViews(); navigation.removeAllViews()
-        status = null; detail = null; autoStatus = null; mediaPermission = null; callPermission = null; logView = null; metrics = null; ownerText = null
+        status = null; detail = null; autoStatus = null; mediaPermission = null; callPermission = null; logView = null; debugView = null; selectionView = null; matchButton = null; resumeButton = null; metrics = null; ownerText = null
         connect = null; toMac = null; toPhone = null; picker = null; holdSwitch = null
         val titles = listOf("Обзор", "Авто", "Устройства", "Настройки")
-        val symbols = listOf("◉", "✦", "⌁", "☷")
+        val icons = listOf(R.drawable.nav_overview, R.drawable.nav_auto, R.drawable.nav_devices, R.drawable.nav_settings)
         titles.forEachIndexed { index, title ->
-            navigation.addView(Button(this).apply {
-                text = "${symbols[index]}\n$title"; isAllCaps = false; textSize = 11f; minHeight = dp(56); setTextColor(if (index == page) accent else muted)
+            val color = if (index == page) accent else muted
+            navigation.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; minimumHeight = dp(72)
+                isClickable = true; isFocusable = true; isSelected = index == page
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
                 background = shape(if (index == page) tint(accent, 24) else Color.TRANSPARENT, 14)
+                addView(ImageView(this@MainActivity).apply {
+                    setImageResource(icons[index]); imageTintList = android.content.res.ColorStateList.valueOf(color)
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }, LinearLayout.LayoutParams(dp(24), dp(24)))
+                addView(text(title, 12f, index == page).apply {
+                    gravity = Gravity.CENTER; setTextColor(color); setSingleLine(true)
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
                 contentDescription = title; setOnClickListener { page = index; render(); scroll.scrollTo(0, 0) }
-            }, LinearLayout.LayoutParams(0, dp(59), 1f).apply { marginStart = dp(3); marginEnd = dp(3) })
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(1); marginEnd = dp(1) })
         }
-        content.addView(text("SEAMLESS  /  HEADPHONES", 11f, true).apply { letterSpacing = .16f; setTextColor(accent) }); gap(content, 22)
-        content.addView(text(listOf("Твой звук.\nТвои правила.", "Само. Но по\nтвоим правилам.", "Два устройства.\nОдна пара.", "Сделай\nSeamless своим.")[page], 33f, true)); gap(content, 8)
+        content.addView(text("SEAMLESS  /  HEADPHONES", 11f, true).apply { letterSpacing = .16f; setTextColor(accent) }); gap(content, 16)
+        content.addView(text(listOf("Твой звук.\nТвои правила.", "Само. Но по\nтвоим правилам.", "Два устройства.\nОдна пара.", "Сделай\nSeamless своим.")[page], 28f, true)); gap(content, 8)
         content.addView(text(listOf("Музыка продолжается. Устройства меняются.", "Разрешения, источники и защита от лишних передач.", "Настрой связь один раз. Дальше просто слушай.", "Оформление, связь и история событий.")[page], 13f, secondary = true)); gap(content, 24)
+        content.addView(button("Скопировать диагностику") { copyDiagnostics() }); gap(content, 12)
         when (page) { 0 -> overview(); 1 -> automation(); 2 -> devicePage(); else -> settings() }
-        gap(content, 8); content.addView(text("0.2.0  ·  БЕЗ ОБЛАКА  ·  БЕЗ ТЕЛЕМЕТРИИ", 10f, secondary = true).apply { letterSpacing = .10f }); refresh()
+        gap(content, 8); content.addView(text("0.3.1  ·  БЕЗ ОБЛАКА  ·  БЕЗ ТЕЛЕМЕТРИИ", 10f, secondary = true).apply { letterSpacing = .10f }); refresh()
     }
     private fun overview() {
         val s = service
@@ -134,20 +174,18 @@ class MainActivity : Activity() {
             row.addView(labels, LinearLayout.LayoutParams(0, -2, 1f)); row.addView(HeadphonesArt(this, accent), LinearLayout.LayoutParams(dp(102), dp(110))); c.addView(row); gap(c, 10)
             status = text("Связь выключена", 12f, secondary = true); c.addView(status)
         }
-        val row = LinearLayout(this)
-        val phone = stack(16).apply { background = shape(surface, 19, tint(ink, 15)) }
-        val mac = stack(16).apply { background = shape(surface, 19, tint(ink, 15)) }
-        row.addView(phone, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(7) }); row.addView(mac, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(7) })
-        phone.addView(text("Android", 17f, true)); gap(phone, 5); phone.addView(text("Этот телефон", 11f, secondary = true)); toPhone = button("Забрать сюда", true) { service?.request("android") }; phone.addView(toPhone)
-        mac.addView(text("Mac", 17f, true)); gap(mac, 5); mac.addView(text("Твой компьютер", 11f, secondary = true)); toMac = button("Передать →") { service?.request("mac") }; mac.addView(toMac)
-        content.addView(row); gap(content, 16)
+        card { c ->
+            c.addView(text("Куда передать звук", 17f, true)); gap(c, 8)
+            toPhone = button("Забрать на Android", true) { service?.request("android") }; c.addView(toPhone)
+            toMac = button("Передать на Mac") { service?.request("mac") }; c.addView(toMac)
+            detail = text("", 13f, secondary = true); gap(c, 12); c.addView(detail)
+        }
         card { c ->
             c.addView(text("✦  Автопереключение", 17f, true)); gap(c, 8); autoStatus = text("Ожидаем подключение", 13f, secondary = true); c.addView(autoStatus)
             c.addView(button("Настроить автоматизацию") { page = 1; render() })
         }
         card { c -> holdSwitch = toggle(c, "Удерживать здесь", "Не передавать наушники до отключения удержания.", s?.held == true) { service?.hold(it) } }
         metrics = text("", 12f, secondary = true); content.addView(metrics); gap(content, 12)
-        detail = text("", 12f, secondary = true); content.addView(detail)
     }
     private fun automation() {
         val s = service
@@ -156,7 +194,7 @@ class MainActivity : Activity() {
                 service?.let { it.autoEnabled = value } ?: settingsPrefs.edit().putBoolean("auto", value).apply()
             }; gap(c, 16)
             autoStatus = text("", 13f, secondary = true); c.addView(autoStatus)
-            c.addView(button("Возобновить после ошибки") { service?.resumeAuto() })
+            resumeButton = button("Вернуть автоматику сейчас") { service?.resumeAuto() }; c.addView(resumeButton)
         }
         card { c ->
             c.addView(text("Два разрешения для автоматики", 17f, true)); gap(c, 15)
@@ -172,7 +210,7 @@ class MainActivity : Activity() {
             c.addView(text("Общее правило хранится на Mac. Настрой его здесь, когда устройства связаны.", 12f, secondary = true))
             c.addView(button("Следовать новому воспроизведению") { service?.setMode(false) })
             c.addView(button("Только когда источник на паузе") { service?.setMode(true) })
-            gap(c, 12); c.addView(text("После ручной команды — 2 минуты приоритета. Звонки, удержание и устаревшие состояния блокируют автоматику.", 12f, secondary = true))
+            gap(c, 12); c.addView(text("Приоритет ручной команды и пауза настраиваются на Mac. «Вернуть автоматику сейчас» сбрасывает ожидание. Затем поставь музыку на паузу и запусти заново. Звонки и удержание по-прежнему защищены.", 12f, secondary = true))
         }
         card { c ->
             c.addView(text("Приложения на телефоне", 17f, true)); gap(c, 8)
@@ -206,11 +244,26 @@ class MainActivity : Activity() {
                 override fun onItemSelected(parent: AdapterView<*>?, view: View?, pos: Int, id: Long) { if (pos > 0 && pos <= devices.size && service?.address != devices[pos - 1].address) service?.address = devices[pos - 1].address }
                 override fun onNothingSelected(parent: AdapterView<*>?) {}
             }
+            selectionView = text("", 12f, secondary = true).apply { setTextIsSelectable(true) }; gap(c, 10); c.addView(selectionView)
+            matchButton = button("Выбрать наушники как на Mac") {
+                val peer = service?.peerHeadset
+                val match = devices.firstOrNull { Headphones.normalize(it.address) == Headphones.normalize(peer ?: "") }
+                if (match != null) { service?.address = match.address; refreshDevices(); refresh() }
+                else toast("Сначала сопряги эти наушники с телефоном в настройках Bluetooth")
+            }; c.addView(matchButton)
             c.addView(button("Разрешить Bluetooth / обновить") { withBluetooth { if (!bound) bind() else refreshDevices() } })
             c.addView(button("Настройки Bluetooth") { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) })
         }
         card { c ->
             c.addView(text("02  /  Добавь свой Mac", 17f, true)); gap(c, 8); c.addView(text("На Mac открой «Устройства → Связать телефон» и перенеси ключ сюда.", 13f, secondary = true)); gap(c, 12)
+            c.addView(button("Сканировать QR с Mac", true) {
+                if (service?.running == true) { toast("Сначала останови связь"); return@button }
+                qrScanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                    .setPrompt("")
+                    .setBeepEnabled(false).setBarcodeImageEnabled(false).setOrientationLocked(false)
+                    .setCaptureActivity(PairingScannerActivity::class.java))
+            }); gap(c, 12)
+            c.addView(text("Или вставь ключ вручную", 12f, secondary = true))
             val key = EditText(this).apply { hint = "Ключ связи с Mac"; setSingleLine(); textSize = 14f; setTextColor(ink); setHintTextColor(muted); minHeight = dp(52); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO; isSaveEnabled = false }
             c.addView(key)
             c.addView(button("Сохранить ключ") {
@@ -237,25 +290,41 @@ class MainActivity : Activity() {
         }
         card { c -> toggle(c, "Восстанавливать связь", "Повторять поиск Mac после временного обрыва. Остановить можно в уведомлении.", service?.reconnect ?: settingsPrefs.getBoolean("reconnect", true)) { value -> service?.let { it.reconnect = value } ?: settingsPrefs.edit().putBoolean("reconnect", value).apply() } }
         card { c ->
-            c.addView(text("История и диагностика", 17f, true)); gap(c, 12); logView = text("Событий пока нет", 11f, secondary = true).apply { typeface = Typeface.MONOSPACE; setTextIsSelectable(true) }; c.addView(logView)
-            c.addView(button("Копировать диагностику") {
-                val report = "Seamless Headphones 0.2\nAndroid ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}\n${Build.MANUFACTURER} ${Build.MODEL}\nАвто: ${service?.autoReason}\n" + service?.events?.reversed()?.joinToString("\n").orEmpty()
-                getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Seamless Headphones", report)); toast("Диагностика скопирована")
-            }); c.addView(button("Очистить историю") { service?.events?.clear(); refresh() })
+            c.addView(text("История Android", 17f, true)); gap(c, 6); c.addView(text("События этого телефона. Ответы компьютера отмечены [Mac].", 12f, secondary = true)); gap(c, 12); logView = text("Событий пока нет", 11f, secondary = true).apply { typeface = Typeface.MONOSPACE; setTextIsSelectable(true) }; c.addView(ScrollView(this).apply { addView(logView) }, LinearLayout.LayoutParams(-1, dp(200)))
+            c.addView(button("Скопировать журнал") { copyDiagnostics() }); c.addView(button("Очистить историю") { service?.clearLogs(); refresh() })
+        }
+        card { c ->
+            toggle(c, "Технические логи", "Локальный журнал BLE, очереди, адресов и этапов передачи. Ключ и QR не записываются.", service?.debugEnabled ?: settingsPrefs.getBoolean("debug", false)) {
+                service?.let { s -> s.debugEnabled = it } ?: settingsPrefs.edit().putBoolean("debug", it).apply(); refresh()
+            }; gap(c, 12)
+            debugView = text("", 11f, secondary = true).apply { typeface = Typeface.MONOSPACE; setTextIsSelectable(true) }
+            c.addView(ScrollView(this).apply { addView(debugView) }, LinearLayout.LayoutParams(-1, dp(220)))
+            c.addView(text("Включи на обоих устройствах, повтори одну передачу и скопируй диагностику с каждого. Последние 1000 записей хранятся до остановки приложения.", 12f, secondary = true))
         }
         card { c -> c.addView(text("Приватность по умолчанию", 17f, true)); gap(c, 8); c.addView(text("Без аккаунта и интернета. Ключ хранится в Android Keystore. Звук не записывается, содержимое уведомлений не читается. По BLE передаются только команды и состояния воспроизведения.", 13f, secondary = true)) }
+    }
+    private fun copyDiagnostics() {
+        val report = service?.diagnostics() ?: "Seamless Headphones 0.3.1 · Android ${Build.VERSION.RELEASE}\n${Build.MANUFACTURER} ${Build.MODEL}\nСервис ещё не запущен. Разрешение Bluetooth: ${bluetoothGranted()}"
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Seamless Headphones", report))
+        toast("Диагностика скопирована — вставь её в сообщение")
     }
     private fun refresh() {
         val s = service
         status?.text = s?.status ?: "Нужно разрешение Bluetooth"
         detail?.text = s?.detail ?: "Начни с настройки устройств."
-        autoStatus?.text = s?.autoReason ?: "Свяжи телефон с Mac"
+        autoStatus?.text = s?.let { "${it.autoReason}\n\nМузыка: ${it.observedSources}\nЗащита: ${it.local.guardReason ?: "ожидаем проверку"}" } ?: "Свяжи телефон с Mac"
         mediaPermission?.text = if (s?.mediaAvailable == true) "✓  Медиасессии доступны" else "1. Нужен доступ к медиасессиям"
         callPermission?.text = if (s?.callKnown == true) "✓  Защита вызовов доступна" else "2. Нужен доступ к состоянию вызовов"
         connect?.text = if (s?.running == true) "Остановить связь" else "Найти Mac"
         val enabled = s?.trusted == true && !s.busy && !s.held && s.address.isNotBlank()
         toMac?.isEnabled = enabled; toPhone?.isEnabled = enabled; toMac?.alpha = if (enabled) 1f else .45f; toPhone?.alpha = if (enabled) 1f else .45f
         picker?.isEnabled = s?.busy != true
+        resumeButton?.isEnabled = s?.trusted == true && !s.busy
+        selectionView?.text = s?.selectionSummary ?: "Разреши Bluetooth, чтобы выбрать наушники"
+        selectionView?.setTextColor(if (s?.selectionMismatch == true) Color.rgb(200, 110, 50) else muted)
+        matchButton?.visibility = if (s?.selectionMismatch == true) View.VISIBLE else View.GONE
+        matchButton?.isEnabled = s?.busy != true
+        debugView?.text = if (s?.debugEnabled == true) s.debugEvents.take(40).joinToString("\n\n").ifBlank { "Ожидаем события…" } else if (settingsPrefs.getBoolean("debug", false)) "Логи включены. Разреши Bluetooth, чтобы запустить сервис" else "Технический журнал выключен"
         if (s != null && holdSwitch?.isChecked != s.held) holdSwitch?.isChecked = s.held
         ownerText?.text = when { s?.busy == true -> "ПЕРЕДАЁМ НАУШНИКИ…"; s?.owner == "mac" -> "СЕЙЧАС НА MAC"; s?.owner == "android" -> "СЕЙЧАС НА ANDROID"; else -> "ЛОКАЛЬНО · MAC + ANDROID" }
         metrics?.text = "${s?.successful ?: 0} передач   ·   Последняя: ${s?.lastDuration ?: "—"}   ·   BLE"
@@ -268,17 +337,27 @@ class MainActivity : Activity() {
         val missing = required.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isEmpty()) { if (!bound) bind(); action() } else { pendingAction = action; requestPermissions(missing.toTypedArray(), 1) }
     }
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 1) { val action = pendingAction; pendingAction = null; if (bluetoothGranted()) { if (!bound) bind(); action?.invoke() } else toast("Разреши устройства поблизости в настройках приложения") }
         refresh()
     }
     private fun bind() { if (!bound) bound = bindService(Intent(this, ResponseService::class.java), connection, BIND_AUTO_CREATE) }
     private fun refreshDevices() {
-        if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return
+        if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) { picker?.visibility = View.GONE; return }
+        picker?.visibility = View.VISIBLE
         devices = runCatching { service?.paired().orEmpty() }.getOrDefault(emptyList())
-        val names = devices.map { try { it.name ?: "Наушники" } catch (_: SecurityException) { "Нет разрешения" } }
-        picker?.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, listOf("Выбрать наушники") + names)
+        val names = devices.map { try { "${it.name ?: "Наушники"}\n${it.address}" } catch (_: SecurityException) { "Нет разрешения" } }
+        picker?.adapter = object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, listOf("Выбрать наушники") + names) {
+            private fun label(position: Int, dropdown: Boolean) = text(getItem(position).orEmpty(), 13f).apply {
+                setPadding(dp(8), dp(12), dp(8), dp(12)); minHeight = dp(54)
+                maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END
+                if (dropdown) setBackgroundColor(surface)
+                layoutParams = AbsListView.LayoutParams(-1, -2)
+            }
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View = label(position, false)
+            override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View = label(position, true)
+        }
         picker?.setSelection(devices.indexOfFirst { it.address == service?.address }.let { if (it >= 0) it + 1 else 0 })
     }
     private fun selectedName(): String = try { service?.paired()?.firstOrNull { it.address == service?.address }?.name ?: "Твои наушники" } catch (_: SecurityException) { "Твои наушники" }
@@ -293,9 +372,8 @@ private class HeadphonesArt(context: Context, private val accent: Int) : View(co
         val scale = width / 120f; canvas.save(); canvas.scale(scale, scale)
         paint.style = Paint.Style.FILL; paint.color = (accent and 0x00FFFFFF) or 0x16000000
         canvas.drawCircle(60f, 60f, 53f, paint)
-        paint.style = Paint.Style.STROKE; paint.strokeWidth = 4f; paint.strokeCap = Paint.Cap.ROUND; paint.color = accent
-        canvas.drawArc(RectF(28f, 25f, 92f, 93f), 180f, 180f, false, paint)
-        canvas.drawRoundRect(RectF(26f, 58f, 39f, 88f), 5f, 5f, paint); canvas.drawRoundRect(RectF(81f, 58f, 94f, 88f), 5f, 5f, paint)
+        val icon = context.getDrawable(R.drawable.icon_foreground)!!
+        icon.setTint(accent); icon.setBounds(6, 6, 114, 114); icon.draw(canvas)
         canvas.restore()
     }
 }
