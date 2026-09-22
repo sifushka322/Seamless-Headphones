@@ -64,25 +64,63 @@ final class SecureWire {
     }
 }
 
-enum Stage: String { case preparing, releasing, acquiring }
+enum HandoffMode: String, CaseIterable {
+    case sequential, parallel, receiverFirst
+    var title: String { switch self {
+        case .sequential: return "Сначала отключить"
+        case .parallel: return "Параллельно"
+        case .receiverFirst: return "Получатель первым"
+    } }
+}
+enum Stage: String { case preparing, releasing, acquiring, complete }
+enum HandoffAction: Equatable { case release, acquire, tryAcquire, complete }
 
-/// The Mac serializes all transactions; stale, duplicate and out-of-order replies do nothing.
+/// Effects are issued once. Release and acquisition may finish in either order.
 struct Transfer {
     let id: String
     let target: String
+    let mode: HandoffMode
     var stage: Stage = .preparing
     let started: Date
-    init(target: String, now: Date = Date(), id: String = UUID().uuidString) {
-        self.id = id; self.target = target; started = now
+    let clockStarted = ProcessInfo.processInfo.systemUptime
+    private(set) var actions: [HandoffAction] = []
+    private(set) var releaseStarted = false
+    private(set) var releaseDone = false
+    private(set) var acquireStarted = false
+    private(set) var acquireDone = false
+    private(set) var fallback = false
+    private(set) var acquisitionDetail = ""
+    var earlyActive: Bool { mode == .receiverFirst && acquireStarted && !fallback && stage != .complete }
+    var elapsed: Double { ProcessInfo.processInfo.systemUptime - clockStarted }
+    init(target: String, now: Date = Date(), id: String = UUID().uuidString, mode: HandoffMode = .sequential) {
+        self.id = id; self.target = target; started = now; self.mode = mode
     }
     mutating func accept(_ packet: Packet) -> Bool {
-        guard packet.id == id else { return false }
-        switch (stage, packet.type) {
-        case (.preparing, "ready"): stage = .releasing; return true
-        case (.releasing, "released"): stage = .acquiring; return true
-        case (.acquiring, "result"): return true
+        actions = []
+        guard packet.id == id, stage != .complete else { return false }
+        switch packet.type {
+        case "ready":
+            guard stage == .preparing else { return false }
+            if mode == .sequential { releaseStarted = true; stage = .releasing; actions = [.release] }
+            else if mode == .parallel {
+                releaseStarted = true; acquireStarted = true; stage = .acquiring; actions = [.release, .acquire]
+            } else { acquireStarted = true; stage = .acquiring; actions = [.tryAcquire] }
+        case "released":
+            guard releaseStarted, !releaseDone else { return false }
+            releaseDone = true
+            if !acquireStarted { acquireStarted = true; stage = .acquiring; actions = [.acquire] }
+            else if acquireDone { stage = .complete; actions = [.complete] }
+        case "result", "earlyResult":
+            guard acquireStarted, !acquireDone, (packet.type == "earlyResult") == earlyActive else { return false }
+            acquireDone = true; acquisitionDetail = packet.detail
+            if releaseDone || !releaseStarted { stage = .complete; actions = [.complete] }
+        case "retryable":
+            // Only a terminal, known failure can authorize a second connection attempt.
+            guard earlyActive, !releaseStarted else { return false }
+            fallback = true; acquireStarted = false; releaseStarted = true; stage = .releasing; actions = [.release]
         default: return false
         }
+        return true
     }
     func expired(at now: Date) -> Bool { now.timeIntervalSince(started) >= 35 }
 }

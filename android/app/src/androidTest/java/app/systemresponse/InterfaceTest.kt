@@ -67,6 +67,18 @@ class InterfaceTest {
             onView(withText("Сканировать QR с Mac")).check(matches(isDisplayed()))
         }
     }
+    @Test fun fastDetectionCanBeDisabledAndSurvivesRecreation() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        ctx.getSharedPreferences("settings", Context.MODE_PRIVATE).edit().putBoolean("fastDetection", true).commit()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            onView(withContentDescription("Авто")).perform(click())
+            onView(withContentDescription("Быстрое обнаружение · 0,5 с")).perform(scrollTo(), click())
+            scenario.recreate()
+            onView(withContentDescription("Быстрое обнаружение · 0,5 с")).perform(scrollTo()).check(matches(isNotChecked()))
+            capture("android-fast-detection")
+            onView(withContentDescription("Быстрое обнаружение · 0,5 с")).perform(click()).check(matches(isChecked()))
+        }
+    }
     private fun capture(name: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.waitForIdleSync()

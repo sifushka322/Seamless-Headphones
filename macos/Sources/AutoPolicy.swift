@@ -10,6 +10,7 @@ struct ActivityState: Codable, Equatable {
     var source = ""
     var connected = false
     var guardReason: String? = nil
+    var handoffVersion: Int? = nil
 }
 
 /// Debounces starts, not continuous playback. Suppression consumes starts instead of postponing them.
@@ -29,6 +30,7 @@ struct MediaEdges {
             for key in matured { pending.removeValue(forKey: key) }
         }
     }
+    func nextDeadline(delay: Double) -> Double? { pending.values.min().map { $0 + delay } }
     mutating func reset() { previous = nil; pending.removeAll() }
 }
 

@@ -20,5 +20,5 @@ if [[ "${1:-}" == "--dmg" ]]; then
   trap 'rm -rf "$STAGE"' EXIT
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
-  hdiutil create -volname 'Seamless Headphones' -srcfolder "$STAGE" -ov -format UDZO "$PWD/dist/SeamlessHeadphones-0.3.1-mac.dmg"
+  hdiutil create -volname 'Seamless Headphones' -srcfolder "$STAGE" -ov -format UDZO "$PWD/dist/SeamlessHeadphones-0.4.0-mac.dmg"
 fi

@@ -19,7 +19,9 @@ class ResponseService : Service() {
     private var quietUntil = 0L
     private var remoteAt = 0L
     private var retryCount = 0
-    private var ticks = 0
+    private var nextSnapshot = 0L
+    private val mediaTick = Runnable { tick() }
+    private var lastTracedLocal: ActivityState? = null
     private var lastSent: ActivityState? = null
     private var remoteArmed = false
     var local = ActivityState(); private set
@@ -44,6 +46,10 @@ class ResponseService : Service() {
     var delay: Int
         get() = prefs.getInt("delay", 2)
         set(value) { prefs.edit().putInt("delay", value.coerceIn(2, 5)).apply(); settingsChanged() }
+    var fastDetection: Boolean
+        get() = prefs.getBoolean("fastDetection", true)
+        set(value) { prefs.edit().putBoolean("fastDetection", value).apply(); settingsChanged() }
+    private val detectionDelay get() = if (fastDetection) 500L else delay * 1000L
     var allowed: Set<String>
         get() = prefs.getStringSet("sources", MediaMonitor.known.keys)?.toSet() ?: emptySet()
         set(value) { prefs.edit().putStringSet("sources", value.toSet()).apply(); settingsChanged() }
@@ -73,17 +79,17 @@ class ResponseService : Service() {
         while (debugEvents.size > 1000) debugEvents.removeLast()
     }
     fun clearLogs() { events.clear(); debugEvents.clear(); changed?.invoke() }
-    fun diagnostics(): String = "Seamless Headphones 0.3.1 · Android\nAndroid ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}\n${Build.MANUFACTURER} ${Build.MODEL}\nBLE: $status\nАвто: $autoReason\n$selectionSummary\nТранзакция: ${transaction?.id ?: "нет"} · ${transaction?.stage ?: if (requestAt > 0) "ожидаем Mac" else "нет"}\nСостояние Android: ${local.json()}\nСостояние Mac: ${peer.json()} ageMs=${if (remoteAt > 0) SystemClock.elapsedRealtime() - remoteAt else -1}\nЗащита Android: $voiceDiagnostics\nАктивные источники: $observedSources\nРазрешены: ${allowed.sorted().joinToString()}\nРазрешения: media=$mediaAvailable calls=$callKnown\nАвто: enabled=$autoEnabled delay=$delay\nТехнические логи: $debugEnabled\n\nИстория этого Android (источник в скобках):\n" + events.reversed().joinToString("\n") + "\n\nТехнический журнал Android:\n" + debugEvents.reversed().joinToString("\n")
+    fun diagnostics(): String = "Seamless Headphones 0.4.0 · Android\nAndroid ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}\n${Build.MANUFACTURER} ${Build.MODEL}\nBLE: $status\nАвто: $autoReason\n$selectionSummary\nТранзакция: ${transaction?.id ?: "нет"} · ${transaction?.stage ?: if (requestAt > 0) "ожидаем Mac" else "нет"}\nАудиоадаптер: ${headphones.diagnostics(address)}\nСостояние Android: ${local.json()}\nСостояние Mac: ${peer.json()} ageMs=${if (remoteAt > 0) SystemClock.elapsedRealtime() - remoteAt else -1}\nЗащита Android: $voiceDiagnostics\nАктивные источники: $observedSources\nРазрешены: ${allowed.sorted().joinToString()}\nРазрешения: media=$mediaAvailable calls=$callKnown\nАвто: enabled=$autoEnabled delayMs=$detectionDelay fastDetection=$fastDetection\nТехнические логи: $debugEnabled\n\nИстория этого Android (источник в скобках):\n" + events.reversed().joinToString("\n") + "\n\nТехнический журнал Android:\n" + debugEvents.reversed().joinToString("\n")
     val events = ArrayDeque<String>()
     var changed: (() -> Unit)? = null
-    private data class Transaction(val id: String, val target: String, val address: String, val automatic: Boolean, val started: Long = SystemClock.elapsedRealtime(), var stage: String = "prepared")
+    private data class Transaction(val id: String, val target: String, val address: String, val automatic: Boolean, val started: Long = SystemClock.elapsedRealtime(), val commands: HandoffCommands = HandoffCommands(target)) { val stage get() = commands.stage }
     private val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
     var address: String
         get() = prefs.getString("headphones", "") ?: ""
         set(value) { if (busy) return; trace("Selected headset=$value"); prefs.edit().putString("headphones", value).apply(); owner = "unknown"; settingsChanged() }
 
     override fun onCreate() {
-        super.onCreate(); headphones = Headphones(this, ::trace); media = MediaMonitor(this); main.post(ticker)
+        super.onCreate(); headphones = Headphones(this, ::trace); media = MediaMonitor(this) { main.removeCallbacks(mediaTick); main.post(mediaTick) }; main.post(ticker)
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("connection", "Связь с Mac", NotificationManager.IMPORTANCE_LOW))
     }
     override fun onBind(intent: Intent) = binder
@@ -160,23 +166,24 @@ class ResponseService : Service() {
                 val token = generation
                 main.postDelayed({ if (generation == token && transaction?.id == tx.id) abort("Время передачи истекло. Проверь текущий аудиовыход", true) }, 35_000)
             }
-            "release", "acquire" -> {
+            "release", "acquire", "tryAcquire" -> {
                 val tx = transaction ?: return
-                if (packet.id != tx.id || tx.stage != "prepared") return
-                val acquire = packet.type == "acquire"
-                if (acquire != (tx.target == "android")) return
+                if (packet.id != tx.id || !tx.commands.accept(packet.type)) return
+                val acquire = packet.type != "release"
                 if (held) { abort("На телефоне включено удержание", true); return }
                 val calls = CallGuard.read(this)
                 if (tx.automatic && (!autoEnabled || !calls.known || calls.busy || (acquire && !local.playing))) { abort("Условия автопереключения изменились", true); return }
-                tx.stage = "working"; trace("STAGE tx=${tx.id} stage=${tx.stage} command=${packet.type}"); detail = if (acquire) "Активно подключаем наушники…" else "Освобождаем наушники…"; changed?.invoke()
-                headphones.change(tx.address, acquire) { ok, reason ->
+                trace("STAGE tx=${tx.id} stage=${tx.stage} command=${packet.type}"); detail = if (acquire) "Активно подключаем наушники…" else "Освобождаем наушники…"; changed?.invoke()
+                headphones.change(tx.address, acquire) { ok, reason, retrySafe ->
                     if (transaction?.id != tx.id) return@change
                     detail = reason; emit(reason)
-                    if (ok) { tx.stage = "awaiting-completion"; ble?.send(Packet(if (acquire) "result" else "released", id = tx.id, detail = reason)) }
-                    else { ble?.send(Packet("error", id = tx.id, detail = reason)); clearTransaction() }
+                    val reply = tx.commands.result(packet.type, ok, retrySafe)
+                    trace("ADAPTER_RESULT tx=${tx.id} command=${packet.type} result=$reply elapsedMs=${SystemClock.elapsedRealtime() - tx.started}")
+                    ble?.send(Packet(reply, id = tx.id, target = if (packet.type == "tryAcquire") "early" else "normal", detail = reason))
+                    if (reply == "error") clearTransaction()
                 }
             }
-            "complete" -> if (transaction?.id == packet.id) {
+            "complete" -> if (transaction?.id == packet.id && transaction?.commands?.canComplete() == true) {
                 owner = packet.target; lastDuration = String.format(java.util.Locale.ROOT, "%.1f с", (SystemClock.elapsedRealtime() - transaction!!.started) / 1000.0)
                 prefs.edit().putInt("transfers", successful + 1).apply(); quietUntil = 0; remoteArmed = false
                 detail = packet.detail; clearTransaction(); emit(if (packet.target == "android") "Телефон принял наушники" else "Mac принял наушники")
@@ -202,7 +209,8 @@ class ResponseService : Service() {
     }
     fun appName(pkg: String) = media.name(pkg)
     private fun tick() {
-        ticks++
+        val snapshotDue = SystemClock.elapsedRealtime() >= nextSnapshot
+        if (snapshotDue) nextSnapshot = SystemClock.elapsedRealtime() + 3000
         if (requestAt > 0 && SystemClock.elapsedRealtime() - requestAt >= 35_000) {
             requestAt = 0; detail = "Mac не подтвердил команду за 35 секунд. Проверь журнал связи"; emit(detail)
         }
@@ -212,13 +220,15 @@ class ResponseService : Service() {
         val observation = "$voiceDiagnostics; mediaAvailable=${observed.available}; active=$observedSources; remoteArmed=$remoteArmed"
         if (lastObservation != observation) { trace("OBSERVE $observation"); lastObservation = observation }
         mediaAvailable = observed.available; callKnown = calls.known; discovered = discovered + observed.discovered
-        edges.sample(observed.playing.intersect(allowed), SystemClock.elapsedRealtime(), delay * 1000L,
+        edges.sample(observed.playing.intersect(allowed), SystemClock.elapsedRealtime(), detectionDelay,
             !trusted || !autoEnabled || !remoteArmed || !calls.known || !observed.available || peer.call || peer.held || held || busy || calls.busy || SystemClock.elapsedRealtime() - remoteAt > 7000 || SystemClock.elapsedRealtime() < quietUntil)
+        main.removeCallbacks(mediaTick)
+        edges.nextDeadline(detectionDelay)?.let { main.postDelayed(mediaTick, maxOf(1L, it - SystemClock.elapsedRealtime())) }
         local = ActivityState(observed.available && calls.known, observed.playing.isNotEmpty(), calls.busy, held, autoEnabled,
-            edges.event, media.name(edges.source).take(180), headphones.connected(address), calls.reason.take(180))
-        if (local != lastSent) trace("LOCAL event=${local.event} playing=${local.playing} source=${local.source} call=${local.call}")
+            edges.event, media.name(edges.source).take(180), headphones.connected(address), calls.reason.take(180), 2)
+        if (local != lastTracedLocal) { lastTracedLocal = local; trace("LOCAL event=${local.event} playing=${local.playing} source=${local.source} call=${local.call}") }
         if (busy && calls.busy) abort("Начался разговор. Передача остановлена")
-        if (trusted && (local != lastSent || ticks % 3 == 0)) { ble?.send(Packet("activity", target = selectedHeadsetName, detail = local.json(), device = address)); lastSent = local }
+        if (trusted && (local != lastSent || snapshotDue)) { ble?.send(Packet("activity", target = selectedHeadsetName, detail = local.json(), device = address)); lastSent = local }
         if (!trusted) autoReason = "Ожидаем связь с Mac"
         else if (!autoEnabled) autoReason = "Автопереключение выключено на телефоне"
         else if (!mediaAvailable) autoReason = "Разреши доступ к медиасессиям"
@@ -231,5 +241,5 @@ class ResponseService : Service() {
         while (events.size > 60) events.removeLast()
         changed?.invoke()
     }
-    override fun onDestroy() { main.removeCallbacksAndMessages(null); stopLink(); headphones.close(); super.onDestroy() }
+    override fun onDestroy() { main.removeCallbacksAndMessages(null); stopLink(); headphones.close(); media.close(); super.onDestroy() }
 }

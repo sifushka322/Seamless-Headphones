@@ -10,3 +10,5 @@ swiftc -swift-version 5 -sdk "$SDK" -module-cache-path "$PWD/.build/modules" mac
 .build/auto-tests
 swiftc -swift-version 5 -sdk "$SDK" -module-cache-path "$PWD/.build/modules" macos/Sources/Wire.swift macos/Sources/PacketQueue.swift macos/Sources/PairingCode.swift macos/Tests/TransportTests.swift -framework AppKit -framework CoreImage -framework Vision -o .build/transport-tests
 .build/transport-tests
+swiftc -swift-version 5 -sdk "$SDK" -module-cache-path "$PWD/.build/modules" macos/Sources/Wire.swift macos/Sources/AutoPolicy.swift macos/Tests/HandoffTests.swift -o .build/handoff-tests
+.build/handoff-tests

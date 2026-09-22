@@ -67,6 +67,10 @@ enum AudioDevices {
 final class Headphones {
     private let queue = DispatchQueue(label: "app.systemresponse.headphones")
     private var operation = UUID()
+    private var systemBusy = false
+    var onTrace: (String) -> Void = { _ in }
+    private func reserve() -> Bool { lock.lock(); defer { lock.unlock() }; if systemBusy { return false }; systemBusy = true; return true }
+    private func unreserve() { lock.lock(); systemBusy = false; lock.unlock() }
     private let lock = NSLock()
     private func begin() -> UUID { lock.lock(); defer { lock.unlock() }; operation = UUID(); return operation }
     private func current(_ token: UUID) -> Bool { lock.lock(); defer { lock.unlock() }; return operation == token }
@@ -89,43 +93,60 @@ final class Headphones {
         if AudioDevices.microphoneActive { return "Микрофон Mac используется. Заверши разговор перед передачей" }
         return nil
     }
+    func diagnostics(address: String) -> String { "basebandConnected=\(IOBluetoothDevice(addressString: address)?.isConnected() ?? false) defaultOutput=\(AudioDevices.currentName)" }
     func cancel() { _ = begin() }
     func release(address: String, completion: @escaping (Bool, String) -> Void) {
+        guard reserve() else { completion(false, "Предыдущая системная операция Bluetooth ещё завершается"); return }
         let token = begin()
         queue.async { [weak self] in
-            guard let self, self.current(token) else { return }
+            guard let self else { return }
+            guard self.current(token) else { self.unreserve(); return }
             guard let device = IOBluetoothDevice(addressString: address) else {
+                self.unreserve()
                 DispatchQueue.main.async { if self.current(token) { completion(false, "Наушники не найдены") } }; return
             }
             let status = device.isConnected() ? device.closeConnection() : kIOReturnSuccess
             let released = status == kIOReturnSuccess && !device.isConnected()
+            self.unreserve()
             DispatchQueue.main.async {
                 guard self.current(token) else { return }
                 completion(released, released ? "Mac освободил наушники" : "macOS не отключила наушники")
             }
         }
     }
-    func acquire(address: String, completion: @escaping (Bool, String) -> Void) {
+    func acquire(address: String, completion: @escaping (Bool, String, Bool) -> Void) {
+        guard reserve() else { completion(false, "Предыдущая системная операция Bluetooth ещё завершается", false); return }
         let token = begin()
+        let start = ProcessInfo.processInfo.systemUptime
         queue.async { [weak self] in
-            guard let self, self.current(token) else { return }
+            guard let self else { return }
+            guard self.current(token) else { self.unreserve(); return }
             guard let device = IOBluetoothDevice(addressString: address) else {
-                DispatchQueue.main.async { if self.current(token) { completion(false, "Наушники не найдены") } }; return
+                self.unreserve()
+                DispatchQueue.main.async { if self.current(token) { completion(false, "Наушники не найдены", false) } }; return
             }
-            // Explicit short HCI timeout. Baseband success alone is never reported as audio success.
-            if !device.isConnected() { _ = device.openConnection(nil, withPageTimeout: 8000, authenticationRequired: false) }
-            DispatchQueue.main.async { self.waitForOutput(address: address, token: token, remaining: 40, completion: completion) }
+            let status = device.isConnected() ? kIOReturnSuccess : device.openConnection(nil, withPageTimeout: 8000, authenticationRequired: false)
+            let connected = device.isConnected()
+            self.unreserve()
+            DispatchQueue.main.async {
+                guard self.current(token) else { return }
+                self.onTrace("ADAPTER mac baseband status=\(status) connected=\(connected) elapsed=\(ProcessInfo.processInfo.systemUptime - start)")
+                if status != kIOReturnSuccess && !connected {
+                    completion(false, "macOS отклонила подключение: \(status)", true)
+                } else { self.waitForOutput(address: address, token: token, remaining: 80, start: start, completion: completion) }
+            }
         }
     }
-    private func waitForOutput(address: String, token: UUID, remaining: Int, completion: @escaping (Bool, String) -> Void) {
+    private func waitForOutput(address: String, token: UUID, remaining: Int, start: Double, completion: @escaping (Bool, String, Bool) -> Void) {
         guard current(token) else { return }
-        if AudioDevices.microphoneActive { completion(false, "Микрофон начал использоваться. Выбор аудиовыхода остановлен"); return }
+        if AudioDevices.microphoneActive { completion(false, "Микрофон начал использоваться. Выбор аудиовыхода остановлен", false); return }
         if let id = AudioDevices.output(for: address), AudioDevices.select(id) {
-            completion(true, "Наушники выбраны системным выходом Mac"); return
+            onTrace("ADAPTER mac route verified elapsed=\(ProcessInfo.processInfo.systemUptime - start)")
+            completion(true, "Наушники выбраны системным выходом Mac", false); return
         }
-        guard remaining > 0 else { completion(false, "macOS не предоставила аудиовыход. Подключи наушники в настройках Bluetooth"); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            self?.waitForOutput(address: address, token: token, remaining: remaining - 1, completion: completion)
+        guard remaining > 0 else { completion(false, "macOS не предоставила аудиовыход. Подключи наушники в настройках Bluetooth", false); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.waitForOutput(address: address, token: token, remaining: remaining - 1, start: start, completion: completion)
         }
     }
 }

@@ -18,7 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         edit.addItem(withTitle: "Копировать", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: "Выделить всё", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit; mainMenu.addItem(editItem); NSApp.mainMenu = mainMenu
-        let view = NSHostingView(rootView: Dashboard(model: model, initialPage: args.contains("--devices") && model.demo ? .devices : args.contains("--settings") && model.demo ? .settings : .overview))
+        let view = NSHostingView(rootView: Dashboard(model: model, initialPage: args.contains("--automation") && model.demo ? .automation : args.contains("--devices") && model.demo ? .devices : args.contains("--settings") && model.demo ? .settings : .overview))
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 790), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Seamless Headphones"; window.contentView = view; window.center(); window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)

@@ -1,3 +1,14 @@
+# 0.4.0 - Early handoff experiment
+
+- Add sequential, parallel, and receiver-first handoff strategies, with peer capability negotiation.
+- Receiver-first keeps the source connected on success and falls back exactly once only after a known terminal rejection.
+- Parallel handoff accepts either reply order and requires both release and route confirmation.
+- React to media callbacks and debounce with one-shot timers; enable optional 500 ms detection while preserving old delay settings.
+- Recheck guards before each effect; reject overlapping adapter operations and ignore stale replies.
+- Add monotonic stage timings and distinguish adapter connection state from route evidence.
+- New unit tests cover both directions, completion ordering, duplicates, fallback, capabilities and debounce.
+- Hardware speed and compatibility remain unverified; compare modes using docs/validation-0.4.md.
+
 # 0.3.1 - Automation diagnostics and reset
 
 - Replace fixed two-minute manual suppression with configurable priority, default 15 seconds; remove independent Android cooldown.

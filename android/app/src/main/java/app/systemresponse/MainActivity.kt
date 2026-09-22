@@ -158,7 +158,7 @@ class MainActivity : ComponentActivity() {
         content.addView(text(listOf("Музыка продолжается. Устройства меняются.", "Разрешения, источники и защита от лишних передач.", "Настрой связь один раз. Дальше просто слушай.", "Оформление, связь и история событий.")[page], 13f, secondary = true)); gap(content, 24)
         content.addView(button("Скопировать диагностику") { copyDiagnostics() }); gap(content, 12)
         when (page) { 0 -> overview(); 1 -> automation(); 2 -> devicePage(); else -> settings() }
-        gap(content, 8); content.addView(text("0.3.1  ·  БЕЗ ОБЛАКА  ·  БЕЗ ТЕЛЕМЕТРИИ", 10f, secondary = true).apply { letterSpacing = .10f }); refresh()
+        gap(content, 8); content.addView(text("0.4.0  ·  БЕЗ ОБЛАКА  ·  БЕЗ ТЕЛЕМЕТРИИ", 10f, secondary = true).apply { letterSpacing = .10f }); refresh()
     }
     private fun overview() {
         val s = service
@@ -225,9 +225,13 @@ class MainActivity : ComponentActivity() {
                 }; c.addView(item)
             }
             c.addView(button("Обновить список плееров") { render() }); gap(c, 15)
+            toggle(c, "Быстрое обнаружение · 0,5 с", "Реагировать на начало музыки через полсекунды. Способ подключения выбирается на Mac.", s?.fastDetection ?: settingsPrefs.getBoolean("fastDetection", true)) { value ->
+                service?.let { it.fastDetection = value } ?: settingsPrefs.edit().putBoolean("fastDetection", value).apply()
+                render()
+            }; gap(c, 12)
             val savedDelay = s?.delay ?: settingsPrefs.getInt("delay", 2)
             val delayLabel = text("Проверять новый звук: $savedDelay с", 13f, true); c.addView(delayLabel)
-            c.addView(SeekBar(this).apply { max = 3; progress = savedDelay - 2; minHeight = dp(48); contentDescription = "Задержка автопереключения"
+            c.addView(SeekBar(this).apply { isEnabled = !(s?.fastDetection ?: settingsPrefs.getBoolean("fastDetection", true)); max = 3; progress = savedDelay - 2; minHeight = dp(48); contentDescription = "Задержка автопереключения"
                 setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                     override fun onProgressChanged(view: SeekBar?, value: Int, user: Boolean) { delayLabel.text = "Проверять новый звук: ${value + 2} с"; if (user) { service?.let { it.delay = value + 2 } ?: settingsPrefs.edit().putInt("delay", value + 2).apply() } }
                     override fun onStartTrackingTouch(view: SeekBar?) {} ; override fun onStopTrackingTouch(view: SeekBar?) {}
@@ -304,7 +308,7 @@ class MainActivity : ComponentActivity() {
         card { c -> c.addView(text("Приватность по умолчанию", 17f, true)); gap(c, 8); c.addView(text("Без аккаунта и интернета. Ключ хранится в Android Keystore. Звук не записывается, содержимое уведомлений не читается. По BLE передаются только команды и состояния воспроизведения.", 13f, secondary = true)) }
     }
     private fun copyDiagnostics() {
-        val report = service?.diagnostics() ?: "Seamless Headphones 0.3.1 · Android ${Build.VERSION.RELEASE}\n${Build.MANUFACTURER} ${Build.MODEL}\nСервис ещё не запущен. Разрешение Bluetooth: ${bluetoothGranted()}"
+        val report = service?.diagnostics() ?: "Seamless Headphones 0.4.0 · Android ${Build.VERSION.RELEASE}\n${Build.MANUFACTURER} ${Build.MODEL}\nСервис ещё не запущен. Разрешение Bluetooth: ${bluetoothGranted()}"
         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Seamless Headphones", report))
         toast("Диагностика скопирована — вставь её в сообщение")
     }

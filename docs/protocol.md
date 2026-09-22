@@ -54,3 +54,14 @@ Update both applications. `activity.device` carries the selected headset address
 Pairing QR is local UTF-8 JSON: `app: "seamless-headphones"`, `version: 1`, `key: <32-byte Base64>`, `device: <Bluetooth address or empty>`, `name: <display label>`. Android scans offline, validates the format, asks before replacing its key and may select an already paired exact address. It cannot enroll while an existing link runs. No URL is opened and no key is sent over BLE. `protocol/pairing-vector.json` contains synthetic test data.
 
 Optional diagnostics stay in local memory (1000 technical entries per device). Exports contain addresses, OS/build information, packet types, transaction IDs, frame sizes, queue depth, MTU and stage/latency. Keys, QR payloads, full signed frames and camera images are excluded. The devices do not exchange journals; peer-originated results are marked with their source.
+
+
+## Application version 0.4: negotiated handoff strategies
+
+Optional `activity.handoffVersion: 2` advertises early-acquisition support. A new Mac uses the sequential protocol with peers lacking this capability. Existing `prepare`, `release`, `acquire`, `result`, `error`, `complete` and envelope v1 remain compatible.
+
+The coordinator snapshots one of three strategies per transaction. Sequential releases then acquires. Parallel issues release and acquire after readiness; both independent confirmations are required before complete, regardless of reply order. Receiver-first sends `tryAcquire` (or acquires locally on Mac) before any release. Verified success replies `earlyResult` and completes without releasing the source. A known terminal connection failure replies `retryable`; only then does the coordinator release the source and issue exactly one ordinary acquire. Timeouts, missing route after link establishment, and uncertain outcomes are terminal errors, not permission for a second in-flight connect.
+
+Replies retain the transaction ID. Acquisition success uses distinct earlyResult/result types so a delayed reply from the first attempt cannot satisfy a fallback. Duplicate readiness, release/result, retryable, and old IDs produce no effects. Android retains its prepared transaction on retryable and accepts exactly one acquire; on error it closes the transaction. For a target Mac, Android may receive complete while still prepared because the source was never asked to disconnect. No rollback or automatic reconnect of the old source is performed on uncertain outcomes.
+
+Local callback-driven observations and one-shot debounce timers reduce detection latency. Fast detection defaults to 500 ms and is independently switchable on each device; old delay preferences remain intact. Source changes during guards are consumed, not replayed. Adapter diagnostics distinguish link/profile state from output verification. Android's last silent-probe route is historical and does not prove audible playback from another app.

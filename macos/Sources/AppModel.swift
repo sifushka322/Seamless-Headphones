@@ -9,6 +9,9 @@ final class AppModel: ObservableObject {
     @Published var autoEnabled = UserDefaults.standard.object(forKey: "auto") as? Bool ?? true { didSet { save(autoEnabled, "auto"); settingsChanged() } }
     @Published var idleOnly = UserDefaults.standard.bool(forKey: "idleOnly") { didSet { save(idleOnly, "idleOnly"); settingsChanged() } }
     @Published var delay = UserDefaults.standard.object(forKey: "delay") as? Double ?? 2.0 { didSet { save(delay, "delay"); settingsChanged() } }
+    @Published var handoffMode = HandoffMode(rawValue: UserDefaults.standard.string(forKey: "handoffMode") ?? "receiverFirst") ?? .receiverFirst { didSet { save(handoffMode.rawValue, "handoffMode"); settingsChanged() } }
+    @Published var fastDetection = UserDefaults.standard.object(forKey: "fastDetection") as? Bool ?? true { didSet { save(fastDetection, "fastDetection"); settingsChanged() } }
+    private var detectionDelay: Double { fastDetection ? 0.5 : delay }
     @Published var cooldown = UserDefaults.standard.object(forKey: "cooldown") as? Double ?? 20.0 { didSet { save(cooldown, "cooldown") } }
     @Published var manualPriority = UserDefaults.standard.object(forKey: "manualPriority") as? Double ?? 15.0 { didSet { save(manualPriority, "manualPriority") } }
     @Published var observedSources = "Звук не обнаружен"
@@ -58,8 +61,12 @@ final class AppModel: ObservableObject {
     private let audio = Headphones()
     private var transfer: Transfer?
     private var timer: Timer?
+    private var mediaTimer: Timer?
+    private var mediaWake: MediaWake?
+    private var nextSnapshot = 0.0
+    private var nextPing = 0.0
+    private var lastTracedLocal: ActivityState?
     private var heartbeat: Date = .distantPast
-    private var watchdogTicks = 0
     private var observers: [NSObjectProtocol] = []
     private var policy = AutoPolicy()
     private var edges = MediaEdges()
@@ -94,6 +101,9 @@ final class AppModel: ObservableObject {
             return
         }
         refresh()
+        mediaWake = MediaWake { [weak self] in self?.tick() }
+        mediaWake?.start()
+        audio.onTrace = { [weak self] in self?.trace($0) }
         ble.onTrace = { [weak self] in self?.trace($0) }
         ble.onStatus = { [weak self] status, trusted in
             guard let self else { return }; let newSession = trusted && !self.trusted; self.link = status; self.trusted = trusted; self.trace("BLE status=\(status) trusted=\(trusted)")
@@ -154,7 +164,9 @@ final class AppModel: ObservableObject {
         guard target == "mac" || target == "android" else { return }
         if automatic, !autoSafe(target) { return }
         if !automatic { policy.manual(now: now, duration: manualPriority) }
-        let tx = Transfer(target: target); trace("BEGIN tx=\(tx.id) target=\(target) automatic=\(automatic); \(selectionSummary)"); transfer = tx; busy = true; automaticTransfer = automatic; stage = "preparing"
+        let mode = (peer.handoffVersion ?? 0) >= 2 ? handoffMode : .sequential
+        if mode != handoffMode { log("Android старой версии · используем последовательную передачу") }
+        let tx = Transfer(target: target, mode: mode); trace("BEGIN tx=\(tx.id) target=\(target) automatic=\(automatic) mode=\(tx.mode.rawValue); \(selectionSummary)"); transfer = tx; busy = true; automaticTransfer = automatic; stage = "preparing"
         headline = "Готовим передачу"; detail = target == "mac" ? "Проверяем готовность Mac и телефона" : "Проверяем, сможет ли телефон принять наушники"
         log("\(automatic ? "Авто" : "Вручную") → \(target == "mac" ? "Mac" : "Android")")
         ble.send(Packet(type: "prepare", id: tx.id, target: target, detail: automatic ? "auto" : "manual", device: selected))
@@ -179,81 +191,104 @@ final class AppModel: ObservableObject {
             peerHeadset = packet.device; peerHeadsetName = packet.target
             if selectionMismatch { trace("Selection mismatch; \(selectionSummary)") }
             if busy && (snapshot.call || snapshot.held) { cancel("Телефон включил защиту разговора или удержание") }
+            tick() // Evaluate the new playback event immediately, not at the next one-second tick.
             return
         }
         if packet.type == "request" { request(packet.target, fromPeer: true); return }
         guard var tx = transfer, packet.id == tx.id else { return }
         // An error can arrive after the remote OS accepted a connection. Never blindly steal it back.
+        if packet.type == "error", packet.target == "early", !tx.earlyActive { return }
         if packet.type == "error" { trace("Remote error tx=\(tx.id) stage=\(tx.stage.rawValue): \(packet.detail)"); fail(packet.detail, source: "Android"); return }
         if packet.type == "ready" {
             guard AudioDevices.normalized(packet.device) == AudioDevices.normalized(selected) else { fail("На устройствах выбраны разные наушники"); return }
         }
         guard tx.accept(packet) else { trace("Ignored out-of-order type=\(packet.type) tx=\(packet.id) stage=\(tx.stage.rawValue)"); return }
-        trace("STAGE tx=\(tx.id) stage=\(tx.stage.rawValue) elapsed=\(Date().timeIntervalSince(tx.started))")
+        trace("STAGE tx=\(tx.id) stage=\(tx.stage.rawValue) elapsed=\(tx.elapsed)")
         transfer = tx; stage = tx.stage.rawValue
-        switch packet.type {
-        case "ready":
+        if packet.type == "ready" {
             guard !held, audio.preflight(address: selected) == nil, !automaticTransfer || autoSafe(tx.target) else { cancel("Условия передачи изменились"); return }
-            headline = "Освобождаем наушники"; detail = "Принимающее устройство готово"
+        }
+        if packet.type == "retryable" { log("Получатель отклонил раннее подключение · отключаем источник и повторяем") }
+        for action in tx.actions { perform(action, tx: tx, reason: packet.detail) }
+    }
+    private func perform(_ action: HandoffAction, tx: Transfer, reason: String) {
+        guard transfer?.id == tx.id else { return }
+        if action != .complete {
+            guard !held, !peer.held, audio.preflight(address: selected) == nil, !automaticTransfer || autoSafe(tx.target) else {
+                cancel("Условия передачи изменились перед следующим этапом"); return
+            }
+        }
+        trace("ACTION tx=\(tx.id) mode=\(tx.mode.rawValue) action=\(action) elapsed=\(tx.elapsed)")
+        switch action {
+        case .release:
+            headline = "Освобождаем источник"
             if tx.target == "android" {
                 audio.release(address: selected) { [weak self] ok, reason in
                     guard let self, self.transfer?.id == tx.id else { return }
-                    self.trace("AUDIO release tx=\(tx.id) ok=\(ok) reason=\(reason)")
-                    if ok { self.receive(Packet(type: "released", id: tx.id)) }
-                    else { self.fail(reason) }
+                    self.trace("AUDIO release tx=\(tx.id) ok=\(ok) elapsed=\(tx.elapsed) reason=\(reason)")
+                    if ok { self.receive(Packet(type: "released", id: tx.id, detail: reason)) } else { self.fail(reason) }
                 }
             } else { ble.send(Packet(type: "release", id: tx.id)) }
-        case "released":
-            headline = "Подключаем наушники"; detail = "Ждём подтверждения аудиомаршрута"
-            if tx.target == "android" { ble.send(Packet(type: "acquire", id: tx.id)) }
+        case .acquire, .tryAcquire:
+            let early = action == .tryAcquire
+            headline = early ? "Пробуем подключить получателя" : "Подключаем наушники"
+            detail = early ? "Источник остаётся подключённым до результата попытки" : "Ждём подтверждения аудиомаршрута"
+            if tx.target == "android" { ble.send(Packet(type: early ? "tryAcquire" : "acquire", id: tx.id)) }
             else {
-                audio.acquire(address: selected) { [weak self] ok, reason in
+                audio.acquire(address: selected) { [weak self] ok, reason, retrySafe in
                     guard let self, self.transfer?.id == tx.id else { return }
-                    self.trace("AUDIO acquire tx=\(tx.id) ok=\(ok) reason=\(reason)")
-                    if ok { self.finish(reason) } else { self.fail(reason) }
+                    self.trace("AUDIO acquire tx=\(tx.id) early=\(early) ok=\(ok) retrySafe=\(retrySafe) elapsed=\(tx.elapsed) reason=\(reason)")
+                    if ok { self.receive(Packet(type: early ? "earlyResult" : "result", id: tx.id, detail: reason)) }
+                    else if early && retrySafe { self.receive(Packet(type: "retryable", id: tx.id, detail: reason)) }
+                    else { self.fail(reason) }
                 }
             }
-        case "result": finish(packet.detail)
-        default: break
+        case .complete: finish(tx.acquisitionDetail.isEmpty ? "Аудиомаршрут получателя подтверждён" : tx.acquisitionDetail)
         }
     }
+
     private func finish(_ reason: String) {
         guard let tx = transfer else { return }
+        trace("FINISH tx=\(tx.id) mode=\(tx.mode.rawValue) fallback=\(tx.fallback) total=\(tx.elapsed)")
         ble.send(Packet(type: "complete", id: tx.id, target: tx.target, detail: reason))
         headline = tx.target == "mac" ? "Звук на Mac" : "Телефон принял наушники"
-        owner = tx.target; lastDuration = String(format: "%.1f с", Date().timeIntervalSince(tx.started))
+        owner = tx.target; lastDuration = String(format: "%.1f с", tx.elapsed)
         successful += 1; save(successful, "transfers"); policy.completed(now: now, cooldown: cooldown); quietUntil = now + cooldown
         detail = reason; log("\(headline) · \(lastDuration)"); transfer = nil; busy = false; automaticTransfer = false; stage = ""; refresh()
     }
     private func fail(_ reason: String, source: String = "Mac") { policy.failed(); autoPaused = true; cancel(reason + "\nАвто приостановлено. Проверь подключение перед возобновлением.", source: source) }
     func cancel(_ reason: String, source: String = "Mac") {
-        if let tx = transfer { trace("CANCEL tx=\(tx.id) stage=\(tx.stage.rawValue) elapsed=\(Date().timeIntervalSince(tx.started)) reason=\(reason)"); ble.send(Packet(type: "cancel", id: tx.id)) }
+        if let tx = transfer { trace("CANCEL tx=\(tx.id) stage=\(tx.stage.rawValue) elapsed=\(tx.elapsed) reason=\(reason)"); ble.send(Packet(type: "cancel", id: tx.id)) }
         audio.cancel(); transfer = nil; busy = false; automaticTransfer = false; stage = ""; quietUntil = now + 10
         headline = "Передача остановлена"; detail = reason; log(reason, source: source)
     }
     private func tick() {
         guard !sleeping else { return }
-        route = AudioDevices.currentName; watchdogTicks += 1
+        route = AudioDevices.currentName
+        let snapshotDue = now >= nextSnapshot
+        if snapshotDue { nextSnapshot = now + 3 }
         let observation = MediaMonitor.observe()
         discoveredSources.merge(observation.names) { _, new in new }
         let sources = observation.active.sorted().map { "\(observation.names[$0] ?? $0) [\($0)] · \(allowed.contains($0) ? "разрешён" : "не выбран")" }.joined(separator: "\n")
         if observedSources != sources { trace("MEDIA active=\(sources.isEmpty ? "none" : sources)"); observedSources = sources }
         let peerReady = now - peerReceived < 7 && peerReceived > 0 && peer.available && peer.automation && !peer.call && !peer.held
-        edges.sample(observation.active.intersection(allowed), now: now, delay: delay,
+        edges.sample(observation.active.intersection(allowed), now: now, delay: detectionDelay,
                      suppress: !autoEnabled || !trusted || !peerReady || held || busy || observation.microphone || now < quietUntil || now < policy.blockedUntil || policy.suspended)
+        mediaTimer?.invalidate(); mediaTimer = nil
+        if let deadline = edges.nextDeadline(delay: detectionDelay) { mediaTimer = Timer.scheduledTimer(withTimeInterval: max(0.001, deadline - now), repeats: false) { [weak self] _ in self?.tick() } }
         let connected = AudioDevices.output(for: selected).map { AudioDevices.number(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice) == $0 } ?? false
         local = ActivityState(available: observation.available, playing: !observation.active.isEmpty, call: observation.microphone,
                               held: held, automation: autoEnabled, event: edges.event,
                               source: MediaMonitor.sources.first { $0.0 == edges.source }?.1 ?? edges.source, connected: connected,
-                              guardReason: observation.microphone ? "Используется микрофон Mac" : nil)
-        if local != lastSent { trace("LOCAL event=\(local.event) playing=\(local.playing) source=\(local.source) call=\(local.call)") }
+                              guardReason: observation.microphone ? "Используется микрофон Mac" : nil, handoffVersion: 2)
+        if local != lastTracedLocal { lastTracedLocal = local; trace("LOCAL event=\(local.event) playing=\(local.playing) source=\(local.source) call=\(local.call)") }
         if busy && local.call { cancel("Микрофон начал использоваться. Передача остановлена") }
         if !busy {
             if owner == "mac" && !connected { owner = "unknown" }
             if owner == "android" && !peer.connected && peerReceived > 0 { owner = "unknown" }
-            if connected && owner == "unknown" { owner = "mac" }
+            if handoffMode == .sequential && connected && owner == "unknown" { owner = "mac" }
         }
-        if trusted, local != lastSent || watchdogTicks % 3 == 0, let data = try? JSONEncoder().encode(local), let json = String(data: data, encoding: .utf8) {
+        if trusted, local != lastSent || snapshotDue, let data = try? JSONEncoder().encode(local), let json = String(data: data, encoding: .utf8) {
             ble.send(Packet(type: "activity", target: selectedName, detail: json, device: selected)); lastSent = local
         }
         let decision = policy.evaluate(mac: local, phone: peer, fresh: now - peerReceived < 7 && peerReceived > 0,
@@ -261,23 +296,23 @@ final class AppModel: ObservableObject {
         let nextReason = selectionMismatch && trusted ? "На устройствах выбраны разные наушники · открой Устройства" : decision.reason
         if autoReason != nextReason { trace("AUTO \(nextReason)") }; autoReason = nextReason; autoPaused = policy.suspended
         let gate = !selectionMismatch && trusted && peerReady && local.available && autoEnabled && !held && !local.call && !busy && !policy.suspended && now >= policy.blockedUntil && now >= quietUntil
-        if trusted, watchdogTicks % 3 == 0 || gate != lastGate {
+        if trusted, snapshotDue || gate != lastGate {
             ble.send(Packet(type: "autoStatus", target: policy.suspended ? "paused" : "ready", detail: autoReason, device: gate ? "armed" : "blocked")); lastGate = gate
         }
         if !selectionMismatch, let target = decision.target { request(target, automatic: true) }
-        if trusted, watchdogTicks % 4 == 0 { ble.send(Packet(type: "ping")) }
+        if trusted, now >= nextPing { nextPing = now + 4; ble.send(Packet(type: "ping")) }
         if trusted, Date().timeIntervalSince(heartbeat) > 14 {
             if busy { policy.failed(); cancel("Телефон перестал отвечать во время передачи") }
             trusted = false; ble.stop(); peerReceived = 0
             if enabled && reconnect { startLink(reveal: false) }
         }
-        if let tx = transfer, tx.expired(at: Date()) { fail("Время передачи истекло. Проверь текущий аудиовыход") }
+        if let tx = transfer, tx.elapsed >= 35 { fail("Время передачи истекло. Проверь текущий аудиовыход") }
     }
     func bluetoothSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings")!)
     }
     func copyDiagnostics() {
-        let text = "Seamless Headphones 0.3.1 · Mac\n\(ProcessInfo.processInfo.operatingSystemVersionString)\nBLE: \(link)\nАвто: \(autoReason)\nВыход: \(route)\n\(selectionSummary)\nТранзакция: \(transfer?.id ?? "нет") · \(stage)\nСостояние Mac: available=\(local.available) playing=\(local.playing) call=\(local.call) held=\(held) connected=\(local.connected)\nСостояние Android: available=\(peer.available) playing=\(peer.playing) call=\(peer.call) held=\(peer.held) connected=\(peer.connected) age=\(peerReceived > 0 ? String(format: "%.1f", now - peerReceived) : "unknown")s\nАвто: enabled=\(autoEnabled) idleOnly=\(idleOnly) delay=\(delay) cooldown=\(cooldown)\nПриоритет ручной команды: \(manualPriority) с\nЗащита Android: \(peer.guardReason ?? "нет сведений")\nАктивные источники Mac: \(observedSources)\nРазрешены: \(allowed.sorted().joined(separator: ", "))\nТехнические логи: \(debugEnabled)\n\nИстория этого Mac (источник в скобках):\n" + events.reversed().joined(separator: "\n") + "\n\nТехнический журнал Mac:\n" + debugEvents.reversed().joined(separator: "\n")
+        let text = "Seamless Headphones 0.4.0 · Mac\n\(ProcessInfo.processInfo.operatingSystemVersionString)\nBLE: \(link)\nАвто: \(autoReason)\nВыход: \(route)\n\(selectionSummary)\nТранзакция: \(transfer?.id ?? "нет") · \(stage)\nАудиоадаптер: \(audio.diagnostics(address: selected))\nСостояние Mac: available=\(local.available) playing=\(local.playing) call=\(local.call) held=\(held) connected=\(local.connected)\nСостояние Android: available=\(peer.available) playing=\(peer.playing) call=\(peer.call) held=\(peer.held) connected=\(peer.connected) age=\(peerReceived > 0 ? String(format: "%.1f", now - peerReceived) : "unknown")s\nАвто: enabled=\(autoEnabled) idleOnly=\(idleOnly) delay=\(delay) cooldown=\(cooldown)\nСпособ передачи: \(handoffMode.rawValue) · fastDetection=\(fastDetection) · delay=\(detectionDelay)\nПриоритет ручной команды: \(manualPriority) с\nЗащита Android: \(peer.guardReason ?? "нет сведений")\nАктивные источники Mac: \(observedSources)\nРазрешены: \(allowed.sorted().joined(separator: ", "))\nТехнические логи: \(debugEnabled)\n\nИстория этого Mac (источник в скобках):\n" + events.reversed().joined(separator: "\n") + "\n\nТехнический журнал Mac:\n" + debugEvents.reversed().joined(separator: "\n")
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
     }
 }

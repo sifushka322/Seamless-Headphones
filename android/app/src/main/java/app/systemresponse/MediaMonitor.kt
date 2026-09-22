@@ -37,16 +37,39 @@ object CallGuard {
 }
 
 data class MediaObservation(val available: Boolean, val playing: Set<String>, val discovered: Set<String>)
-class MediaMonitor(private val context: Context) {
+class MediaMonitor(private val context: Context, private val changed: () -> Unit = {}) {
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private val manager = context.getSystemService(MediaSessionManager::class.java)
+    private val component = ComponentName(context, MediaListener::class.java)
+    private val controllers = mutableMapOf<android.media.session.MediaSession.Token, Pair<android.media.session.MediaController, android.media.session.MediaController.Callback>>()
+    private var listening = false
+    private val sessionListener = MediaSessionManager.OnActiveSessionsChangedListener { changed() }
+    private fun observe(sessions: List<android.media.session.MediaController>) {
+        if (!listening) { manager.addOnActiveSessionsChangedListener(sessionListener, component, main); listening = true }
+        val tokens = sessions.map { it.sessionToken }.toSet()
+        controllers.keys.filter { it !in tokens }.forEach { token -> controllers.remove(token)?.let { it.first.unregisterCallback(it.second) } }
+        sessions.forEach { controller -> if (controller.sessionToken !in controllers) {
+            val callback = object : android.media.session.MediaController.Callback() {
+                override fun onPlaybackStateChanged(state: PlaybackState?) { changed() }
+                override fun onSessionDestroyed() { changed() }
+            }
+            controller.registerCallback(callback, main); controllers[controller.sessionToken] = controller to callback
+        } }
+    }
+    fun close() {
+        if (listening) runCatching { manager.removeOnActiveSessionsChangedListener(sessionListener) }
+        listening = false; controllers.values.forEach { runCatching { it.first.unregisterCallback(it.second) } }; controllers.clear()
+    }
     companion object {
         val known = linkedMapOf("com.spotify.music" to "Spotify", "com.google.android.apps.youtube.music" to "YouTube Music",
             "com.apple.android.music" to "Apple Music", "org.videolan.vlc" to "VLC", "com.maxmpz.audioplayer" to "Poweramp",
             "com.google.android.youtube" to "YouTube", "ru.yandex.music" to "Яндекс Музыка")
     }
     fun sample(): MediaObservation = try {
-        val sessions = context.getSystemService(MediaSessionManager::class.java).getActiveSessions(ComponentName(context, MediaListener::class.java))
+        val sessions = manager.getActiveSessions(component)
+        observe(sessions)
         MediaObservation(true, sessions.filter { it.playbackState?.state == PlaybackState.STATE_PLAYING }.map { it.packageName }.toSet(), sessions.map { it.packageName }.toSet())
-    } catch (_: SecurityException) { MediaObservation(false, emptySet(), emptySet()) }
+    } catch (_: SecurityException) { close(); MediaObservation(false, emptySet(), emptySet()) }
     catch (_: RuntimeException) { MediaObservation(false, emptySet(), emptySet()) }
     fun name(pkg: String): String = known[pkg] ?: runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
 }

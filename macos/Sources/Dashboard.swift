@@ -33,7 +33,7 @@ struct Dashboard: View {
                     header
                     switch page { case .overview: overview; case .automation: automation; case .devices: devices; case .settings: settings }
                     if !model.errorText.isEmpty { Label(model.errorText, systemImage: "exclamationmark.triangle").foregroundStyle(.orange).font(.callout) }
-                    HStack { Text("SEAMLESS HEADPHONES").tracking(1.7); Spacer(); Text(model.demo ? "ДЕМО · БЕЗ КОМАНД УСТРОЙСТВАМ" : "0.3.1 · ЛОКАЛЬНО ПО BLUETOOTH") }
+                    HStack { Text("SEAMLESS HEADPHONES").tracking(1.7); Spacer(); Text(model.demo ? "ДЕМО · БЕЗ КОМАНД УСТРОЙСТВАМ" : "0.4.0 · ЛОКАЛЬНО ПО BLUETOOTH") }
                         .font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(.tertiary).padding(.top, 6)
                 }.padding(32).frame(maxWidth: 1100)
             }
@@ -153,6 +153,10 @@ struct Dashboard: View {
             }.padding(22).card(surface, line)
             VStack(alignment: .leading, spacing: 18) {
                 Text("Как переключать").font(.headline)
+                Picker("Подключение", selection: $model.handoffMode) {
+                    ForEach(HandoffMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                }.disabled(model.busy)
+                Text("Получатель первым: пробуем подключиться без разрыва источника; при явном отказе ОС отключаем источник и повторяем. При зависшей попытке повтор не запускается. Для сравнения доступны обычный и параллельный режимы.").font(.caption).foregroundStyle(.secondary)
                 Picker("Режим", selection: $model.idleOnly) { Text("Следовать новому звуку").tag(false); Text("Только в паузе").tag(true) }.pickerStyle(.segmented)
                 Text(model.idleOnly ? "Если источник ещё играет, наушники останутся у него. После паузы нужно новое начало воспроизведения." : "Начни музыку в выбранном приложении на другом устройстве — Seamless передаст наушники после короткой проверки.").font(.callout).foregroundStyle(.secondary)
                 Divider()
@@ -168,8 +172,10 @@ struct Dashboard: View {
                     }
                 }
                 Divider()
+                Toggle("Быстрое обнаружение · 0,5 с", isOn: $model.fastDetection)
+                Text("Быстрый режим реагирует и на короткое видео в разрешённом браузере. Отключи его, чтобы использовать задержку ниже.").font(.caption).foregroundStyle(.secondary)
                 HStack { Text("Проверка нового звука"); Spacer(); Text("\(Int(model.delay)) с").monospacedDigit().foregroundStyle(accent) }.font(.callout)
-                Slider(value: $model.delay, in: 2...5, step: 1).accessibilityLabel("Задержка автопереключения")
+                Slider(value: $model.delay, in: 2...5, step: 1).disabled(model.fastDetection).accessibilityLabel("Задержка автопереключения")
                 HStack { Text("Пауза между передачами"); Spacer(); Text("\(Int(model.cooldown)) с").monospacedDigit().foregroundStyle(accent) }.font(.callout)
                 Slider(value: $model.cooldown, in: 5...60, step: 5).accessibilityLabel("Пауза между автоматическими передачами")
                 HStack { Text("Приоритет ручной команды"); Spacer(); Text("\(Int(model.manualPriority)) с").monospacedDigit().foregroundStyle(accent) }.font(.callout)

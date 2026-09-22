@@ -8,5 +8,5 @@ export GRADLE_USER_HOME="$ROOT/.tools/gradle-home"
 GRADLE="${GRADLE_BIN:-$ROOT/.tools/gradle-8.11.1/bin/gradle}"
 "$GRADLE" -p android --no-daemon :app:testDebugUnitTest :app:assembleDebug
 mkdir -p dist
-cp android/app/build/outputs/apk/debug/app-debug.apk dist/SeamlessHeadphones-0.3.1-android.apk
-echo "Built: $ROOT/dist/SeamlessHeadphones-0.3.1-android.apk (debug signing)"
+cp android/app/build/outputs/apk/debug/app-debug.apk dist/SeamlessHeadphones-0.4.0-android.apk
+echo "Built: $ROOT/dist/SeamlessHeadphones-0.4.0-android.apk (debug signing)"
