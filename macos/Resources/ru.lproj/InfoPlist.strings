@@ -1,0 +1,2 @@
+"NSBluetoothAlwaysUsageDescription" = "Связь с твоим Android по Bluetooth для передачи наушников между устройствами.";
+"NSBluetoothPeripheralUsageDescription" = "Передача команд твоему Android по BLE без интернета.";

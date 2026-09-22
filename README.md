@@ -1,85 +1,85 @@
 # Seamless Headphones
 
-Твой звук между **Mac и Android**. Нативные Swift / SwiftUI и Kotlin, управление по BLE, без аккаунта, сервера и общей сети Wi-Fi. Независимая реализация с нуля; код PodSwitch не используется. Windows не поддерживается.
+Move your headphones between **Mac and Android**. Native Swift/SwiftUI and Kotlin apps coordinate over authenticated BLE, without accounts, a server, or a shared Wi-Fi network. This is an independent implementation; no PodSwitch code is used. Windows is not supported.
 
-**Версия 0.4.0 — эксперимент с ранним подключением получателя.** На Mac доступны обычная последовательная передача, параллельная и «Получатель первым». Быстрое обнаружение музыки — 0,5 секунды. Выигрыш на реальных наушниках требует проверки. Сборки находятся в `dist`; описание режимов и проверок — в [validation 0.4](docs/validation-0.4.md).
+**0.5.0 - Stable Production Release.** The stable release channel uses parallel handoff, confirmed automation controls, clearer connection states, and Russian/English interfaces. Update both apps. See [release validation](docs/validation-0.5.md) for checks and limitations.
 
-![Mac, светлая тема — демонстрационные данные](docs/assets/mac-light.png)
+The release designation describes the selected software channel. The locally generated installers still use ad hoc signing on Mac and the existing Android debug certificate to preserve upgrade compatibility. They are not notarized or store-distributed production installers.
 
-## Что умеет
+## Features
 
-- Передавать наушники при **новом начале воспроизведения** в выбранном плеере: подготовка → освобождение → активное подключение → проверка маршрута.
-- Два правила: следовать новому воспроизведению или переключать только когда предыдущий источник на паузе.
-- Фильтр приложений, быстрое обнаружение 0,5 секунды или сохранённая задержка 2–5 секунд, пауза между передачами 5–60 секунд, настраиваемый приоритет ручной команды (по умолчанию 15 секунд).
-- Блокировать передачу при удержании, доступных сигналах разговора/микрофона, отсутствии разрешений и устаревшем состоянии второго устройства.
-- Останавливать автоматику после ошибки до явного возобновления. Не переигрывать старые события после восстановления связи.
-- Восстанавливать BLE после временного обрыва; Mac возобновляет связь после сна, Android повторяет поиск с ограничением попыток.
-- Четыре раздела на обеих платформах: обзор, автоматизация, устройства, настройки. Светлая, тёмная и системная темы; мята, кобальт и ирис; история, диагностика, состояния и причины блокировки.
-- Хранить секрет в Keychain / Android Keystore, аутентифицировать команды HMAC-SHA256, отклонять повторы и чужую сессию.
+- Start connecting the receiver while disconnecting the source; finish only after both sides confirm.
+- Follow new playback, or transfer only when the current source is paused. The Mac confirms the shared rule selected from either device.
+- Filter playback apps, detect new playback after 0.5 seconds, or use a 2-5 second delay. Configure cooldown and manual-command priority.
+- Block transfers during calls, microphone use, a user block, missing permissions, or stale peer state.
+- Pause automation after an error. Recover explicitly without replaying old playback events.
+- Reconnect after temporary BLE failures with bounded retries on Android.
+- Overview, Automation, Devices, and Settings on both platforms; light, dark, and system themes; Russian, English, and system language selection.
+- Store pairing secrets in Keychain/Android Keystore and authenticate commands with HMAC-SHA256, session binding, and replay protection.
 
-## Первый запуск
+## Setup
 
-1. **Mac:** macOS 14+, текущий DMG для Apple Silicon. Перенеси `Seamless Headphones.app` в Applications. Подпись ad hoc, нотарификации Apple нет; при блокировке запуска используй системное «Открыть всё равно», не отключай Gatekeeper целиком.
-2. **Android:** Android 12+ (API 31). Установи APK. Он подписан тестовым сертификатом и предназначен для личной проверки.
-3. Сопряги наушники с обеими ОС в системных настройках. Выбери одну и ту же пару в разделе «Устройства» приложений.
-4. На Mac включи связь и покажи QR-код. На телефоне: «Устройства → Сканировать QR с Mac», подтверди сохранение ключа и нажми «Найти Mac». Ручной ввод ключа также доступен. QR может выбрать уже сопряжённые наушники с тем же адресом. Разреши Bluetooth / устройства поблизости и уведомления; камера нужна только для сканирования.
-5. На телефоне открой «Авто»: включи системный доступ к уведомлениям для Seamless (он нужен для API медиасессий), разреши состояние вызовов. Приложение не читает тексты уведомлений, номера, контакты или журнал звонков.
-6. Проверь ручную передачу в обе стороны и слышимость своей музыки. Если Android блокирует A2DP, открой системные настройки: текущая сборка не обходит ограничения прошивки.
-7. Для автоматической передачи включи автоматику на обоих устройствах. Дождись готовности, останови и **заново запусти** музыку на получателе. Уже играющая музыка при подключении не считается новой командой.
+1. **Mac:** macOS 14 or newer. The current DMG targets Apple Silicon. Move `Seamless Headphones.app` to Applications. The local build is ad hoc signed and not notarized.
+2. **Android:** Android 12 or newer (API 31). Install the APK over the previous version to preserve settings and pairing.
+3. Pair the headphones with both operating systems. Select the same Bluetooth address in both apps under Devices; matching names alone are insufficient.
+4. Enable the link on Mac and show its QR code. On Android, scan the QR under Devices, confirm the key, and find the Mac. Manual key entry is also available. Grant Nearby Devices/Bluetooth and notification permissions; the camera is only used for QR scanning.
+5. Under Automation on Android, enable notification access for the media-session API and allow phone-state access for call protection. The app does not read notification contents, phone numbers, contacts, or call history.
+6. Test manual handoff in both directions and check your player's audio. Some Android firmware denies A2DP control; the app does not bypass that restriction.
+7. Enable automation on both devices. Once ready, pause and **start playback again** on the receiving device. Existing playback and starts during cooldown are not queued for a later takeover.
 
-Закрытие окна Mac оставляет приложение в строке меню. На телефоне связь работает в foreground service с уведомлением и кнопкой остановки. После перезапуска приложения связь включается вручную. На Android после восьми неуспешных попыток восстановления нужен новый запуск поиска.
+Settings includes Language and Appearance. System language uses Russian for a Russian system preference and English otherwise. Device and player names remain unchanged.
 
-При обновлении с 0.1 внутренние bundle/package ID и хранилища оставлены прежними для сохранения настроек и доверия. Отображаемое название везде — Seamless Headphones. Обновлять нужно обе стороны.
+Closing the Mac window leaves the menu-bar app running. Android uses a foreground service with a stop action. Starting a link is explicit after app restart. Android retries a temporary failure up to eight times; a new manual search starts a fresh retry budget.
 
-Для версии 0.4.0 обнови оба приложения. Дубли в списках удаляются по Bluetooth-адресу. При несовпадении наушников сравни адреса в разделе «Устройства»: совпадения имени недостаточно. Android может выбрать точное совпадение кнопкой «Выбрать наушники как на Mac».
+## Controls and diagnostics
 
-На Android кнопка «Скопировать диагностику» находится сверху каждой страницы. «Авто → Вернуть автоматику сейчас» сбрасывает ожидание после ручной передачи; после сброса поставь музыку на паузу и заново запусти её в разрешённом приложении.
+Parallel handoff is the fixed connection method. The automation rule controls *when* to transfer, not *how* to connect. Selecting a rule does not immediately move audio. Android shows the confirmed rule, pending acknowledgement, or an error. Block Switching prevents both manual and automatic handoffs; it does not connect headphones by itself.
 
-Для разбора ошибки включи «Настройки → Технические логи» на обоих устройствах, повтори одну передачу и скопируй диагностику с каждого. Последние 1000 технических записей хранятся в памяти приложения. Журналы не синхронизируются: один итог передачи может отображаться на обеих сторонах, а источник события отмечен `[Mac]` или `[Android]`. Экспорт содержит адреса устройств, этапы, очередь и задержки BLE, но не ключи, QR, исходные кадры или звук.
+Reset Pause clears an error/cooldown when prerequisites are satisfied. It does not enable disabled automation or bypass a user block. Each unavailable action explains its reason.
 
-## Где проходят границы
+Enable Technical Logs on both devices, reproduce one transfer, and copy both reports. Each device retains up to 1,000 technical entries in memory. Journals are not synchronized: a shared outcome may appear on both devices, tagged with its origin. Reports include device addresses, transaction stages, and BLE timing; never secrets, QR payloads, signed frame contents, or audio. Technical identifiers and raw diagnostics are retained for debugging.
 
-**BLE передаёт команды, а звук идёт через системный Bluetooth.** Интернет и Wi-Fi для связи не нужны, но Mac и телефон должны быть рядом и активны. Сон Mac исключает координацию передачи; после пробуждения связь восстанавливается.
+## Boundaries
 
-Mac наблюдает активность CoreAudio-процессов, Android — состояние медиасессий. Это не анализ звука и не доказательство того, что пользователь слышит музыку. Постоянно открытый аудиопоток некоторых плееров может скрыть новый Play; реклама внутри разрешённого плеера неотличима от его музыки. Браузеры на Mac по умолчанию исключены.
+BLE transports commands; the operating systems transport audio over Bluetooth. Both devices must be nearby and awake. No internet or common Wi-Fi network is required.
 
-Android проверяет A2DP и маршрут собственного бесшумного AudioTrack. Это не гарантирует маршрут всех сторонних плееров. Mac проверяет выбранный CoreAudio-выход по адресу в UID; неизвестное соответствие считается отказом. Приложение не переносит трек, позицию и очередь и не нажимает Play/Pause в сторонних приложениях.
+Mac observes CoreAudio process activity; Android observes media sessions. Neither proves that music is audible. A player with a continuously open stream can hide a new Play event; ads in an allowed browser can look like music. Ambiguous shared WebKit helpers cannot initiate handoff without a reliable source identity. Their observed audio still protects the source in idle-only mode.
 
-Сигналы вызова/микрофона зависят от ОС. Перед важным разговором используй удержание. Передача звонков не реализована. Уже начатый системный вызов подключения может завершиться после отмены; автоматического отката с риском перехвата звука нет.
+Android checks A2DP and its own silent AudioTrack route, not every third-party player's output. Mac verifies the selected CoreAudio output against the headphone address. The app does not transfer tracks, playback positions, or queues, and does not press Play/Pause in another app.
 
-HMAC защищает подлинность команд, **не шифрует метаданные BLE**. Это экспериментальный локальный протокол, без внешнего аудита безопасности. В Android нет разрешения INTERNET, аналитики, записи аудио или accessibility service.
+Call/microphone signals depend on the OS. Call handoff is not implemented. An accepted system connection can complete after cancellation; uncertain operations are not automatically rolled back. A lost route is reported without forcibly taking audio back.
 
-## Сборка и проверки
+HMAC authenticates commands; it does not encrypt BLE metadata. This local protocol has not had an external security audit. Android requests no INTERNET permission and uses no analytics, audio recording, or accessibility service.
 
-Mac: Command Line Tools, установленный современный macOS SDK, прямая компиляция Swift без внешних зависимостей:
+## Build and test
+
+Mac requires Command Line Tools and a modern installed macOS SDK:
 
 ```sh
 bash scripts/test-macos.sh
 bash scripts/build-macos.sh --dmg
 ```
 
-`MACOS_SDK` переопределяет путь SDK. Целевая macOS 14.0, архитектура машины сборки. Наличие API наблюдения процессов дополнительно проверяется во время работы; недоступный монитор блокирует автоматику.
+`MACOS_SDK` overrides the SDK path. The deployment target is macOS 14.0; the build architecture follows the host. Missing process-observation APIs disable automation at runtime.
 
-Android: JDK 17, SDK 35 / Build Tools 35.0.0, Gradle 8.11.1, AGP 8.9.1, Kotlin 2.1.20:
+Android uses JDK 17, SDK 35, Build Tools 35.0.0, Gradle 8.11.1, AGP 8.9.1, and Kotlin 2.1.20:
 
 ```sh
 cd android
 ./gradlew testDebugUnitTest assembleDebug lintDebug
-# На запущенном эмуляторе или подключённом тестовом устройстве:
+# With a test emulator or device connected:
 ./gradlew connectedDebugAndroidTest
 ```
 
-`bash scripts/build-android.sh` использует локальные инструменты `.tools` или `JAVA_HOME`, `ANDROID_HOME`, `GRADLE_BIN` и копирует APK в `dist`. SDK/JDK, ключи, кеши и сборки не входят в Git. Для распространения потребуются постоянная release-подпись Android, Developer ID и нотарификация Mac.
+`bash scripts/build-android.sh` uses `.tools` or the configured JAVA_HOME, ANDROID_HOME, and GRADLE_BIN, then copies the APK to `dist`. SDKs, keys, caches, and installers are excluded from Git. Store distribution requires a permanent Android release-signing configuration and Mac Developer ID/notarization.
 
-## Код и документация
+## Repository
 
-| Путь | Назначение |
+| Path | Purpose |
 |---|---|
-| `macos/Sources` | SwiftUI, политика автоматики, CoreAudio, BLE peripheral, координатор |
-| `android/app/src/main` | Kotlin UI, медиасессии, BLE central, foreground service, A2DP |
-| `protocol/vectors.json` | Общие векторы протокола с синтетическим ключом |
-| [Сценарии](docs/scenarios.md) | Продуктовые правила, Apple, аппаратная приёмка |
-| [Протокол](docs/protocol.md) | Доверие, сообщения, транзакции и защита от устаревших событий |
-| [Проверки](docs/validation.md) | Выполненные тесты и непроверенные аппаратные условия |
-
-![Mac, тёмная тема — демонстрационные данные](docs/assets/mac-dark.png)
+| `macos/Sources` | SwiftUI, automation policy, CoreAudio, BLE peripheral, coordinator |
+| `android/app/src/main` | Kotlin UI, media sessions, BLE central, service, A2DP |
+| `localization` | Shared translations of user-facing state and errors |
+| `protocol/vectors.json` | Shared protocol vectors with synthetic keys |
+| [Protocol](docs/protocol.md) | Authentication, messages, transactions, stale-event protection |
+| [Release validation](docs/validation-0.5.md) | Audit findings, verification, hardware limitations |

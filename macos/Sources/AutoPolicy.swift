@@ -11,6 +11,15 @@ struct ActivityState: Codable, Equatable {
     var connected = false
     var guardReason: String? = nil
     var handoffVersion: Int? = nil
+    var idleOnly: Bool? = nil
+    var owner: String? = nil
+}
+
+/// Shared WebKit helpers do not identify the app that started playback.
+enum MediaSourcePolicy {
+    static func canTrigger(_ bundle: String) -> Bool {
+        bundle != "com.apple.WebKit.GPU" && !bundle.hasPrefix("com.apple.WebKit.") && !bundle.hasPrefix("unknown.")
+    }
 }
 
 /// Debounces starts, not continuous playback. Suppression consumes starts instead of postponing them.
@@ -50,7 +59,7 @@ struct AutoPolicy {
     mutating func failed() { suspended = true }
     mutating func resume() { suspended = false; blockedUntil = 0; resetSession() }
     mutating func evaluate(mac: ActivityState, phone: ActivityState, fresh: Bool, linked: Bool,
-                           busy: Bool, owner: String, idleOnly: Bool, now: Double) -> AutoDecision {
+                           busy: Bool, owner: String, idleOnly: Bool, now: Double, quietUntil: Double = 0) -> AutoDecision {
         let macStarted = macEvent != nil && mac.event > macEvent!
         let phoneStarted = phoneEvent != nil && phone.event > phoneEvent!
         macEvent = mac.event; phoneEvent = phone.event
@@ -61,9 +70,12 @@ struct AutoPolicy {
         if !mac.available || !phone.available { return AutoDecision(reason: "Настрой доступ к воспроизведению и защите звонков") }
         if mac.call { return AutoDecision(reason: "Mac: " + (mac.guardReason ?? "используется микрофон")) }
         if phone.call { return AutoDecision(reason: "Android: " + (phone.guardReason ?? "сигнал разговора или микрофона")) }
-        if mac.held || phone.held { return AutoDecision(reason: "На одном из устройств включено удержание") }
+        if mac.held || phone.held { return AutoDecision(reason: "На одном из устройств включён запрет переключений") }
         if busy { return AutoDecision(reason: "Передача уже выполняется") }
-        if now < blockedUntil { return AutoDecision(reason: "Пауза после переключения · \(Int(ceil(blockedUntil - now))) с") }
+        if now < max(blockedUntil, quietUntil) {
+            let reason = quietUntil > blockedUntil ? "Пауза после остановки" : "Пауза после переключения"
+            return AutoDecision(reason: "\(reason) · \(Int(ceil(max(blockedUntil, quietUntil) - now))) с")
+        }
         // If starts coincide in one evaluation, the coordinator uses a stable Mac-first tie break.
         for (target, started, destination, source) in [("mac", macStarted, mac, phone), ("android", phoneStarted, phone, mac)] {
             guard started, destination.playing, owner != target else { continue }

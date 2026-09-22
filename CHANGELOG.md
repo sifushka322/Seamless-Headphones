@@ -1,3 +1,14 @@
+# 0.5.0 - Stable Production Release
+
+- Add Russian, English, and system-language selection on Mac and Android, including controls, status messages, and pairing flows.
+
+- Keep parallel handoff as the app's transfer method, regardless of the saved experimental selection. Older peers retain the sequential compatibility path.
+- Confirm shared automation rules and pause-reset commands with correlated replies, visible pending states, timeouts, and current settings in snapshots.
+- Explain blocked controls and distinguish disabled automation, a user block, cooldown, and active transfer progress. Refresh route status when a successful transfer no longer matches the observed output.
+- Make explicit themes independent from system dark mode, align native control colors, and show feedback for copy, refresh, and settings actions.
+- Exclude unidentified WebKit helpers from handoff triggers. Preserve source audio observation for idle-only protection.
+- Restore BLE reconnect after transient timeouts and release the A2DP pending guard after a confirmed rejected disconnect.
+
 # 0.4.0 - Early handoff experiment
 
 - Add sequential, parallel, and receiver-first handoff strategies, with peer capability negotiation.

@@ -12,6 +12,12 @@ import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.Executors
 
+object A2dpPendingPolicy {
+    fun rejectionIsSettled(accepted: Boolean, state: Int?, operationToken: Int, pendingToken: Int): Boolean =
+        operationToken == pendingToken && !accepted &&
+        (state == BluetoothProfile.STATE_CONNECTED || state == BluetoothProfile.STATE_DISCONNECTED)
+}
+
 @SuppressLint("MissingPermission")
 class Headphones(private val context: Context, private val trace: (String) -> Unit = {}) {
     private val adapter = context.getSystemService(BluetoothManager::class.java).adapter
@@ -23,6 +29,7 @@ class Headphones(private val context: Context, private val trace: (String) -> Un
     private var track: AudioTrack? = null
     private var closed = false
     private var unsettled: BluetoothDevice? = null
+    private var pendingToken = 0
     private var sawTransition = false
     private var adapterStarted = 0L
     private var lastRouteAddress = ""
@@ -76,12 +83,15 @@ class Headphones(private val context: Context, private val trace: (String) -> Un
             if (connect) probe(address, token, completion) else completion(true, "Телефон освободил A2DP", false)
             return
         }
-        unsettled = device; sawTransition = false
+        unsettled = device; pendingToken = token; sawTransition = false
         worker.execute {
             val attempt = runCatching { p.javaClass.getMethod(if (connect) "connect" else "disconnect", BluetoothDevice::class.java).invoke(p, device) as? Boolean == true }
             main.post {
                 val state = runCatching { p.getConnectionState(device) }.getOrNull()
-                if (attempt.getOrDefault(false).not() && state == BluetoothProfile.STATE_DISCONNECTED) unsettled = null
+                // A rejected disconnect can leave the headset connected without a subsequent
+                // broadcast. Both terminal states release the guard; uncertain transitions do not.
+                // A cancelled call may settle itself, but cannot clear a newer attempt's guard.
+                if (A2dpPendingPolicy.rejectionIsSettled(attempt.getOrDefault(false), state, token, pendingToken)) unsettled = null
                 if (token != operation || closed) return@post
                 trace("A2DP invoke accepted=${attempt.getOrDefault(false)} error=${attempt.exceptionOrNull()?.javaClass?.simpleName ?: "none"}")
                 if (attempt.getOrDefault(false)) poll(device, connect, token, 60, completion)

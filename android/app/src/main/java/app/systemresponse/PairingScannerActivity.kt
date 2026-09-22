@@ -4,6 +4,7 @@ import android.app.Activity
 import android.graphics.Color
 import android.view.Gravity
 import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -21,10 +22,10 @@ class PairingScannerActivity : CaptureActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(16), dp(20), dp(16)); setBackgroundColor(0xDD101517.toInt())
             addView(TextView(this@PairingScannerActivity).apply {
-                text = "Наведи камеру на QR-код в Seamless на Mac"; textSize = 18f; setTextColor(Color.WHITE)
+                text = L.text(this@PairingScannerActivity, "Наведи камеру на QR-код в Seamless на Mac"); textSize = 18f; setTextColor(Color.WHITE)
             })
             addView(Button(this@PairingScannerActivity).apply {
-                text = "Закрыть сканер"; isAllCaps = false
+                text = L.text(this@PairingScannerActivity, "Закрыть сканер"); isAllCaps = false
                 setOnClickListener { setResult(Activity.RESULT_CANCELED); finish() }
             })
         }
@@ -34,6 +35,9 @@ class PairingScannerActivity : CaptureActivity() {
             view.setPadding(bars.left + dp(20), bars.top + dp(16), bars.right + dp(20), dp(16)); insets
         }
         setContentView(root)
+        // The camera overlay always uses dark surfaces, regardless of the app's chosen theme.
+        root.isForceDarkAllowed = false
+        window.insetsController?.setSystemBarsAppearance(0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
         return scanner
     }
 }

@@ -6,12 +6,13 @@ android {
         applicationId = "app.systemresponse"
         minSdk = 31
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.4.0"
+        versionCode = 7
+        versionName = "0.5.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+    sourceSets.getByName("main").assets.srcDir("../../localization")
 }
 dependencies {
     implementation("androidx.activity:activity:1.9.3")

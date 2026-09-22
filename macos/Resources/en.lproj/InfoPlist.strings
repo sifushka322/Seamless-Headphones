@@ -1,0 +1,2 @@
+"NSBluetoothAlwaysUsageDescription" = "Connect to your Android over Bluetooth to move your headphones between devices.";
+"NSBluetoothPeripheralUsageDescription" = "Send headphone handoff commands to your Android over BLE without the internet.";

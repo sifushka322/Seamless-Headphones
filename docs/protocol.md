@@ -65,3 +65,9 @@ The coordinator snapshots one of three strategies per transaction. Sequential re
 Replies retain the transaction ID. Acquisition success uses distinct earlyResult/result types so a delayed reply from the first attempt cannot satisfy a fallback. Duplicate readiness, release/result, retryable, and old IDs produce no effects. Android retains its prepared transaction on retryable and accepts exactly one acquire; on error it closes the transaction. For a target Mac, Android may receive complete while still prepared because the source was never asked to disconnect. No rollback or automatic reconnect of the old source is performed on uncertain outcomes.
 
 Local callback-driven observations and one-shot debounce timers reduce detection latency. Fast detection defaults to 500 ms and is independently switchable on each device; old delay preferences remain intact. Source changes during guards are consumed, not replayed. Adapter diagnostics distinguish link/profile state from output verification. Android's last silent-probe route is historical and does not prove audible playback from another app.
+
+## Application version 0.5: confirmed controls
+
+Activity capability version 3 adds optional coordinator fields `idleOnly` and `owner`; missing fields mean unknown state. `mode` and `resumeAuto` requests carry a unique id. `controlResult` echoes the id with target `mode` or `resume` and a user-facing detail. For mode, device is `idle`, `follow`, or `rejected`; for resume, it is `accepted` or `rejected`. A client accepts only its matching pending reply and times out after 10 seconds. Selecting the current rule does not reset observation; changing it during a transfer is rejected.
+
+The user-facing connection method is fixed to parallel. Sequential remains a compatibility path for peers without capability version 2. Language changes affect presentation only; packet types, enum values, device identifiers, authentication and transaction IDs are unchanged.

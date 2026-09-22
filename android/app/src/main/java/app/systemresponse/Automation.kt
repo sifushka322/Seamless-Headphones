@@ -3,15 +3,17 @@ package app.systemresponse
 import org.json.JSONObject
 
 data class ActivityState(val available: Boolean = false, val playing: Boolean = false, val call: Boolean = false,
-    val held: Boolean = false, val automation: Boolean = false, val event: Int = 0, val source: String = "", val connected: Boolean = false, val guardReason: String? = null, val handoffVersion: Int? = null) {
+    val held: Boolean = false, val automation: Boolean = false, val event: Int = 0, val source: String = "", val connected: Boolean = false, val guardReason: String? = null, val handoffVersion: Int? = null, val idleOnly: Boolean? = null, val owner: String? = null) {
     fun json(): String = JSONObject().put("available", available).put("playing", playing).put("call", call).put("held", held)
-        .put("automation", automation).put("event", event).put("source", source).put("connected", connected).put("guardReason", guardReason ?: JSONObject.NULL).put("handoffVersion", handoffVersion ?: JSONObject.NULL).toString()
+        .put("automation", automation).put("event", event).put("source", source).put("connected", connected).put("guardReason", guardReason ?: JSONObject.NULL).put("handoffVersion", handoffVersion ?: JSONObject.NULL)
+        .put("idleOnly", idleOnly ?: JSONObject.NULL).put("owner", owner ?: JSONObject.NULL).toString()
     companion object {
         fun parse(text: String): ActivityState {
             require(text.length < 1600)
             val o = JSONObject(text)
             return ActivityState(o.getBoolean("available"), o.getBoolean("playing"), o.getBoolean("call"), o.getBoolean("held"),
-                o.getBoolean("automation"), o.getInt("event"), o.getString("source"), o.getBoolean("connected"), if (o.isNull("guardReason")) null else o.optString("guardReason").take(180), if (o.isNull("handoffVersion")) null else o.getInt("handoffVersion")).also {
+                o.getBoolean("automation"), o.getInt("event"), o.getString("source"), o.getBoolean("connected"), if (o.isNull("guardReason")) null else o.optString("guardReason").take(180), if (o.isNull("handoffVersion")) null else o.getInt("handoffVersion"),
+                if (o.isNull("idleOnly")) null else o.getBoolean("idleOnly"), if (o.isNull("owner")) null else o.getString("owner").also { require(it in setOf("mac", "android", "unknown")) }).also {
                 require(it.event >= 0 && it.source.length < 200)
             }
         }

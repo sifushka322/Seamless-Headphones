@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+python3 scripts/check-localization.py localization/backend-en.json localization/macos-en.json
 SDK="${MACOS_SDK:-/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk}"
 if [[ ! -d "$SDK" ]]; then SDK="$(xcrun --sdk macosx --show-sdk-path)"; fi
 APP="$PWD/dist/Seamless Headphones.app"
@@ -13,6 +14,9 @@ swiftc -swift-version 5 -parse-as-library -O -sdk "$SDK" -target "$(uname -m)-ap
   -framework AppKit -framework SwiftUI -framework CoreBluetooth -framework IOBluetooth \
   -framework CoreAudio -framework Security -o "$APP/Contents/MacOS/SeamlessHeadphones"
 cp macos/Info.plist "$APP/Contents/Info.plist"
+cp localization/backend-en.json "$APP/Contents/Resources/backend-en.json"
+cp localization/macos-en.json "$APP/Contents/Resources/macos-en.json"
+cp -R macos/Resources/en.lproj macos/Resources/ru.lproj "$APP/Contents/Resources/"
 codesign --force --sign - "$APP"
 echo "Built: $APP"
 if [[ "${1:-}" == "--dmg" ]]; then
@@ -20,5 +24,5 @@ if [[ "${1:-}" == "--dmg" ]]; then
   trap 'rm -rf "$STAGE"' EXIT
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
-  hdiutil create -volname 'Seamless Headphones' -srcfolder "$STAGE" -ov -format UDZO "$PWD/dist/SeamlessHeadphones-0.4.0-mac.dmg"
+  hdiutil create -volname 'Seamless Headphones' -srcfolder "$STAGE" -ov -format UDZO "$PWD/dist/SeamlessHeadphones-0.5.0-mac.dmg"
 fi

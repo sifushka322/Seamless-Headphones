@@ -10,10 +10,21 @@ import android.os.ParcelUuid
 import java.util.ArrayDeque
 import java.util.UUID
 
+enum class BleFailure(val retryable: Boolean) {
+    TRANSIENT(true), AUTHENTICATION(false), PERMISSION(false), INCOMPATIBLE_SERVICE(false)
+}
+
+object BleRetryPolicy {
+    fun nextDelaySeconds(failure: BleFailure, running: Boolean, reconnect: Boolean, attempts: Int): Int? {
+        if (!running || !reconnect || !failure.retryable || attempts !in 0..7) return null
+        return minOf(60, 5 * (1 shl minOf(4, attempts)))
+    }
+}
+
 @SuppressLint("MissingPermission")
 class BleClient(private val context: Context, private val secret: ByteArray,
     private val status: (String, Boolean) -> Unit, private val received: (Packet) -> Unit,
-    private val lost: () -> Unit, private val trace: (String) -> Unit = {}) {
+    private val lost: (BleFailure) -> Unit, private val trace: (String) -> Unit = {}) {
     companion object {
         val SERVICE: UUID = UUID.fromString("845E1000-7F5A-4CB5-9AE8-2DC18A64BB01")
         val WRITE: UUID = UUID.fromString("845E1001-7F5A-4CB5-9AE8-2DC18A64BB01")
@@ -40,9 +51,11 @@ class BleClient(private val context: Context, private val secret: ByteArray,
         override fun onScanResult(callbackType: Int, result: ScanResult) { handler.post {
             if (!scanning || gatt != null) return@post
             stopScan(); status("Mac найден. Проверяем доверие…", false)
-            gatt = result.device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+            try { gatt = result.device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE) }
+            catch (_: SecurityException) { fail("Разреши доступ к Bluetooth на телефоне", BleFailure.PERMISSION) }
+            catch (_: RuntimeException) { fail("Не удалось подключиться к BLE Mac") }
         } }
-        override fun onScanFailed(errorCode: Int) { handler.post { fail("Поиск BLE не запустился: $errorCode") } }
+        override fun onScanFailed(errorCode: Int) { handler.post { if (scanning) fail("Поиск BLE не запустился: $errorCode") } }
     }
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, code: Int, state: Int) { handler.post {
@@ -67,7 +80,8 @@ class BleClient(private val context: Context, private val secret: ByteArray,
             write = service?.getCharacteristic(WRITE)
             val notify = service?.getCharacteristic(NOTIFY)
             val descriptor = notify?.getDescriptor(CCCD)
-            if (code != BluetoothGatt.GATT_SUCCESS || write == null || notify == null || descriptor == null) { fail("На Mac другой BLE-сервис"); return@post }
+            if (code != BluetoothGatt.GATT_SUCCESS) { fail("Не удалось прочитать BLE-сервис Mac"); return@post }
+            if (write == null || notify == null || descriptor == null) { fail("На Mac другой BLE-сервис", BleFailure.INCOMPATIBLE_SERVICE); return@post }
             if (!g.setCharacteristicNotification(notify, true)) { fail("Не удалось включить ответы Mac"); return@post }
             descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
             if (!g.writeDescriptor(descriptor)) fail("Подписка BLE отклонена")
@@ -98,20 +112,26 @@ class BleClient(private val context: Context, private val secret: ByteArray,
     }
     fun start() {
         stop()
-        if (adapter == null || !adapter.isEnabled) { fail("Включи Bluetooth на телефоне"); return }
+        val enabled = try { adapter?.isEnabled == true }
+        catch (_: SecurityException) { fail("Разреши доступ к Bluetooth на телефоне", BleFailure.PERMISSION); return }
+        if (!enabled) { fail("Включи Bluetooth на телефоне"); return }
         status("Ищем Mac рядом…", false); scanning = true
-        try { adapter.bluetoothLeScanner.startScan(listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE)).build()),
+        try { adapter!!.bluetoothLeScanner.startScan(listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE)).build()),
             ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scanner) }
-        catch (e: Exception) { fail("Нет доступа к Bluetooth: ${e.javaClass.simpleName}"); return }
+        catch (e: SecurityException) { fail("Разреши доступ к Bluetooth на телефоне", BleFailure.PERMISSION); return }
+        catch (e: Exception) { fail("Поиск Bluetooth недоступен: ${e.javaClass.simpleName}"); return }
         val token = generation
-        handler.postDelayed({ if (token == generation && !trusted) fail("Mac не ответил за 25 секунд. Проверь ключ и включи связь на Mac") }, 25_000)
+        handler.postDelayed({ if (token == generation && !trusted) fail("Mac не ответил за 25 секунд. Проверь, что Mac рядом и связь на нём включена") }, 25_000)
     }
     private fun stopScan() { if (scanning) { runCatching { adapter?.bluetoothLeScanner?.stopScan(scanner) }; scanning = false } }
     fun stop() {
         generation++; stopScan(); trusted = false; wire = null; buffer = FrameBuffer(); writes.clear(); packets.clear(); payloadSize = 20; discovering = false; writing = false; write = null
         val old = gatt; gatt = null; runCatching { old?.disconnect(); old?.close() }
     }
-    private fun fail(reason: String) { trace("BLE failure: $reason"); stop(); status(reason, false); lost() }
+    private fun fail(reason: String, failure: BleFailure = BleFailure.TRANSIENT) {
+        trace("BLE failure=${failure.name} retryable=${failure.retryable}: $reason")
+        stop(); status(reason, false); lost(failure)
+    }
     private fun receiveBytes(value: ByteArray) {
         try {
             for (frame in buffer.append(value)) {
@@ -130,7 +150,7 @@ class BleClient(private val context: Context, private val secret: ByteArray,
                     }
                 }
             }
-        } catch (_: Exception) { fail("Проверка доверия не пройдена. Проверь ключ с Mac") }
+        } catch (_: Exception) { fail("Проверка доверия не пройдена. Проверь ключ с Mac", BleFailure.AUTHENTICATION) }
     }
     fun send(packet: Packet) {
         if (!trusted) return

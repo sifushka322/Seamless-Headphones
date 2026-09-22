@@ -12,3 +12,7 @@ swiftc -swift-version 5 -sdk "$SDK" -module-cache-path "$PWD/.build/modules" mac
 .build/transport-tests
 swiftc -swift-version 5 -sdk "$SDK" -module-cache-path "$PWD/.build/modules" macos/Sources/Wire.swift macos/Sources/AutoPolicy.swift macos/Tests/HandoffTests.swift -o .build/handoff-tests
 .build/handoff-tests
+swiftc -swift-version 5 -sdk "$SDK" -module-cache-path "$PWD/.build/modules" macos/Sources/AutoPolicy.swift macos/Tests/UXPolicyTests.swift -o .build/ux-policy-tests
+.build/ux-policy-tests
+swiftc -swift-version 5 -sdk "$SDK" -module-cache-path "$PWD/.build/modules" macos/Sources/UILocalization.swift macos/Tests/LocalizationTests.swift -framework SwiftUI -o .build/localization-tests
+.build/localization-tests
