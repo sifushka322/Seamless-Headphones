@@ -1,6 +1,6 @@
 # Seamless Headphones
 
-Move your headphones between **Mac and Android**. Native Swift/SwiftUI and Kotlin apps coordinate over authenticated BLE, without accounts, a server, or a shared Wi-Fi network. This is an independent implementation; no PodSwitch code is used. Windows is not supported.
+Move your headphones between **Mac and Android**. Native Swift/SwiftUI and Kotlin apps coordinate over authenticated BLE, without accounts, a server, or a shared Wi-Fi network. Windows is not supported.
 
 **0.5.0 - Stable Production Release.** The stable release channel uses parallel handoff, confirmed automation controls, clearer connection states, and Russian/English interfaces. Update both apps. See [release validation](docs/validation-0.5.md) for checks and limitations.
 
