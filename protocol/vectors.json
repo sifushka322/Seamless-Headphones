@@ -1,0 +1,14 @@
+{
+  "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "session": "00112233-4455-4677-8899-AABBCCDDEEFF",
+  "vectors": [
+    {
+      "role": "android",
+      "frame": "1|00112233-4455-4677-8899-AABBCCDDEEFF|android|1|eyJ0eXBlIjoicmVhZHkiLCJpZCI6InRlc3QtdHJhbnNhY3Rpb24iLCJ0YXJnZXQiOiJhbmRyb2lkIiwiZGV0YWlsIjoi0JPQvtGC0L7QstC+IiwiZGV2aWNlIjoiQUE6QkI6Q0M6REQ6RUU6RkYifQ==|5AZ9yoU2TiStl4NSu1ac+fU3Ib59w9wVbUqLZAc9F60="
+    },
+    {
+      "role": "mac",
+      "frame": "1|00112233-4455-4677-8899-AABBCCDDEEFF|mac|1|eyJ0eXBlIjoicmVhZHkiLCJpZCI6InRlc3QtdHJhbnNhY3Rpb24iLCJ0YXJnZXQiOiJhbmRyb2lkIiwiZGV0YWlsIjoi0JPQvtGC0L7QstC+IiwiZGV2aWNlIjoiQUE6QkI6Q0M6REQ6RUU6RkYifQ==|jQaYlKEu1C88sHijcyboN3OtepGK6OrV5VWkIShZNgM="
+    }
+  ]
+}
