@@ -19,6 +19,7 @@ struct Dashboard: View {
     @State private var search = ""
     @State private var revoke = false
     @State private var notice = ""
+    @State private var noticeID = UUID()
     private var effectiveScheme: ColorScheme { model.theme == "dark" ? .dark : model.theme == "light" ? .light : scheme }
     private var dark: Bool { effectiveScheme == .dark }
     private var accent: Color {
@@ -41,23 +42,28 @@ struct Dashboard: View {
         return "Mac: \(name) [\(address)]\nAndroid: \(phoneName) [\(phoneAddress)]"
     }
     var body: some View {
+        GeometryReader { geometry in
+            content(compact: geometry.size.width < 1000)
+        }.frame(minWidth: 800, minHeight: 560)
+    }
+    private func content(compact: Bool) -> some View {
         HStack(spacing: 0) {
             sidebar
             Rectangle().fill(line).frame(width: 1)
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    header
+                    header(compact: compact)
                     if !model.errorText.isEmpty {
                         LLabel(model.errorText, systemImage: "exclamationmark.triangle.fill")
                             .font(.callout).foregroundStyle(warning).padding(16).frame(maxWidth: .infinity, alignment: .leading)
                             .background(warning.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                     }
-                    switch page { case .overview: overview; case .automation: automation; case .devices: devices; case .settings: settings }
-                    HStack { LT("SEAMLESS HEADPHONES").tracking(1.7); Spacer(); LT(model.demo ? "ДЕМО · БЕЗ КОМАНД УСТРОЙСТВАМ" : "0.5.0 · STABLE · ЛОКАЛЬНО ПО BLUETOOTH") }
+                    switch page { case .overview: overview(compact: compact); case .automation: automation; case .devices: devices(compact: compact); case .settings: settings(compact: compact) }
+                    HStack { LT("SEAMLESS HEADPHONES").tracking(1.7); Spacer(); LT(model.demo ? "ДЕМО · БЕЗ КОМАНД УСТРОЙСТВАМ" : "0.5.1 · STABLE · ЛОКАЛЬНО ПО BLUETOOTH") }
                         .font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(.tertiary).padding(.top, 6)
-                }.padding(32).frame(maxWidth: 1100)
+                }.padding(compact ? 20 : 32).frame(maxWidth: 1100)
             }
-        }.background(canvas).tint(accent).frame(minWidth: 960, minHeight: 720)
+        }.background(canvas).tint(accent)
             .environment(\.colorScheme, effectiveScheme)
             .environment(\.locale, localization.locale)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: page)
@@ -81,12 +87,14 @@ struct Dashboard: View {
                 VStack(alignment: .leading, spacing: 1) { LT("Seamless").font(.system(size: 20, weight: .bold, design: .rounded)); LT("HEADPHONES").font(.system(size: 9, weight: .semibold)).tracking(2.3).foregroundStyle(secondary) }
             }.padding(.top, 16)
             VStack(spacing: 6) {
-                ForEach(Page.allCases, id: \.self) { destination in
+                ForEach(Array(Page.allCases.enumerated()), id: \.element) { index, destination in
                     Button { page = destination } label: {
                         HStack(spacing: 12) { Image(systemName: destination.symbol).font(.system(size: 15)).frame(width: 20); LT(destination.rawValue).font(.system(size: 13, weight: page == destination ? .semibold : .regular)).lineLimit(1); Spacer() }
                             .padding(.horizontal, 13).padding(.vertical, 12).foregroundStyle(page == destination ? accent : secondary)
                             .background(page == destination ? accent.opacity(0.11) : .clear, in: RoundedRectangle(cornerRadius: 11))
                     }.buttonStyle(.plain)
+                        .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                        .accessibilityValue(L(page == destination ? "Выбрано" : "Не выбрано"))
                 }
             }
             Spacer()
@@ -99,16 +107,16 @@ struct Dashboard: View {
                 .foregroundStyle(secondary)
         }.padding(20).frame(width: 224).background(surface.opacity(0.45))
     }
-    private var header: some View {
-        HStack(alignment: .top) {
+    private func header(compact: Bool) -> some View {
+        adaptiveStack(compact: compact, spacing: 12) {
             VStack(alignment: .leading, spacing: 7) { LT(page.rawValue).font(.system(size: 29, weight: .bold, design: .rounded)); LT(page.subtitle).font(.system(size: 13)).foregroundStyle(secondary) }
-            Spacer()
+            if !compact { Spacer() }
             pill(model.automationSummary, icon: model.held || model.peer.held ? "lock.fill" : model.autoPaused ? "pause.circle" : model.autoEnabled ? "sparkles" : "hand.tap", color: model.held || model.peer.held || model.autoPaused ? warning : accent)
         }
     }
-    private var overview: some View {
+    private func overview(compact: Bool) -> some View {
         VStack(spacing: 20) {
-            if !model.trusted || model.selected.isEmpty {
+            if !model.trusted || model.selected.isEmpty || model.selectionMismatch {
                 HStack(spacing: 14) {
                     Image(systemName: "link.badge.plus").font(.title2).foregroundStyle(accent)
                     VStack(alignment: .leading, spacing: 4) { LT("Начнём с твоих устройств").font(.headline); LT("Выбери наушники, затем свяжи телефон с Mac.").font(.caption).foregroundStyle(secondary) }
@@ -124,14 +132,14 @@ struct Dashboard: View {
                         .font(.system(size: 14)).foregroundStyle(secondary)
                     HStack(spacing: 7) { Circle().fill(model.trusted ? accent : warning).frame(width: 6, height: 6); LT(model.link).font(.system(size: 11)).foregroundStyle(secondary) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                ZStack {
+                if !compact { ZStack {
                     Circle().stroke(accent.opacity(0.12), lineWidth: 1).frame(width: 156, height: 156)
                     Circle().fill(accent.opacity(0.08)).frame(width: 130, height: 130)
                     Image(systemName: "airpods.pro").font(.system(size: 70, weight: .ultraLight)).foregroundStyle(accent)
                     Image(systemName: model.busy ? "arrow.triangle.2.circlepath" : model.owner == "unknown" ? "questionmark" : "checkmark").font(.system(size: 13, weight: .semibold)).padding(10).background(surface, in: Circle()).offset(x: 54, y: 52).foregroundStyle(accent)
-                }.accessibilityHidden(true)
+                }.accessibilityHidden(true) }
             }.padding(28).frame(maxWidth: .infinity).background(LinearGradient(colors: [accent.opacity(0.09), surface], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 24)).overlay(RoundedRectangle(cornerRadius: 24).stroke(line))
-            HStack(spacing: 14) {
+            adaptiveStack(compact: compact, spacing: 14) {
                 deviceCard("Mac", icon: "laptopcomputer", subtitle: model.local.playing ? "Воспроизведение активно" : "Звук не воспроизводится", target: "mac")
                 deviceCard("Android", icon: "iphone", subtitle: model.peer.playing ? "Воспроизведение активно" : model.trusted ? "Управление по Bluetooth доступно" : "Ожидаем связь с телефоном", target: "android")
             }
@@ -149,7 +157,7 @@ struct Dashboard: View {
                 if model.hasAutoWait && model.canResumeAuto { LButton(model.resumeAutoLabel, action: resumeAutomation) }
                 else { Button { page = .automation } label: { Image(systemName: "arrow.up.right") }.buttonStyle(.borderless).accessibilityLabel(L("Настройки автоматизации")) }
             }.padding(20).card(surface, line)
-            HStack(spacing: 14) {
+            adaptiveStack(compact: compact, spacing: 14) {
                 metric("Передач", value: "\(model.successful)", icon: "arrow.left.arrow.right")
                 metric("Последняя", value: model.lastDuration, icon: "timer")
                 metric("Связь с телефоном", value: model.trusted ? "Установлена" : "Нет связи", icon: "antenna.radiowaves.left.and.right")
@@ -230,11 +238,14 @@ struct Dashboard: View {
             }.padding(22).card(surface, line)
         }
     }
-    private var devices: some View {
+    private func devices(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 18) {
                 rowLabel("1. Выбери наушники", "Сначала сопряги их с обеими ОС через настройки Bluetooth.", icon: "headphones")
                 LPicker("Наушники", selection: $model.selected) { LT("Выбрать устройство").tag(""); ForEach(model.headsets) { Text(verbatim: "\($0.name) · \($0.id)").tag($0.id) } }.disabled(model.busy)
+                if model.headsets.isEmpty {
+                    LT("Наушники не найдены. Сопряги их в настройках Bluetooth, затем обнови список.").font(.callout).foregroundStyle(secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 HStack { LButton("Обновить список") { model.refresh(); showNotice("Список обновлён: \(model.headsets.count) устройств") }; LButton("Настройки Bluetooth", action: model.bluetoothSettings) }
                 Text(verbatim: localizedSelectionSummary).font(.system(size: 12, design: .monospaced)).foregroundStyle(model.selectionMismatch ? warning : secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 if model.selectionMismatch { LLabel("Выбери на обоих устройствах наушники с одинаковым адресом", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(warning) }
@@ -246,10 +257,10 @@ struct Dashboard: View {
                 HStack {
                     if model.enabled { LButton(model.showPairing ? "Скрыть QR и ключ" : "Показать QR и ключ") { model.showPairing.toggle() }; LButton("Остановить связь", action: model.disable) }
                     else { LButton("Связать телефон", action: model.enable).buttonStyle(.borderedProminent) }
-                    Spacer(); if model.enabled { LButton("Отозвать доступ", role: .destructive) { revoke = true } }
+                    Spacer(); LButton("Отозвать доступ", role: .destructive) { revoke = true }
                 }
                 if model.showPairing && !model.pairingCode.isEmpty {
-                    HStack(alignment: .center, spacing: 22) {
+                    adaptiveStack(compact: compact, spacing: 22) {
                         PairingQR(key: model.pairingCode, device: model.selected, name: model.selectedName)
                         VStack(alignment: .leading, spacing: 10) {
                             LT("Наведи камеру телефона").font(.headline)
@@ -268,7 +279,7 @@ struct Dashboard: View {
             }.padding(22).card(surface, line)
         }
     }
-    private var settings: some View {
+    private func settings(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 16) {
                 LT("Язык").font(.headline)
@@ -297,7 +308,14 @@ struct Dashboard: View {
             }.padding(22).card(surface, line)
             Toggle(isOn: $model.reconnect) { rowLabel("Восстанавливать связь", "Возвращаться к связи после сна Mac и временных обрывов.", icon: "arrow.triangle.2.circlepath") }.toggleStyle(.switch).padding(22).card(surface, line)
             VStack(alignment: .leading, spacing: 14) {
-                HStack { LT("История Mac").font(.headline); Spacer(); LButton("Скопировать весь отчёт") { showNotice(model.copyDiagnostics() ? "Полный отчёт скопирован" : "Не удалось скопировать отчёт") }; LButton("Очистить") { model.clearLogs(); showNotice("История и технический журнал очищены") }.disabled(model.events.isEmpty && model.debugEvents.isEmpty) }
+                adaptiveStack(compact: compact, spacing: 12) {
+                    LT("История Mac").font(.headline)
+                    if !compact { Spacer() }
+                    HStack {
+                        LButton("Скопировать весь отчёт") { showNotice(model.copyDiagnostics() ? "Полный отчёт скопирован" : "Не удалось скопировать отчёт") }
+                        LButton("Очистить") { model.clearLogs(); showNotice("История и технический журнал очищены") }.disabled(model.events.isEmpty && model.debugEvents.isEmpty)
+                    }
+                }
                 LT("События этого Mac. Ответы телефона отмечены [Android].").font(.caption).foregroundStyle(secondary)
                 LTextField("Поиск в событиях", text: $search).textFieldStyle(.roundedBorder)
                 if model.events.isEmpty { LLabel("События появятся после подключения", systemImage: "clock").font(.caption).foregroundStyle(secondary) }
@@ -320,8 +338,12 @@ struct Dashboard: View {
         HStack(alignment: .top, spacing: 13) { Image(systemName: icon).font(.system(size: 21, weight: .light)).foregroundStyle(accent).frame(width: 28); VStack(alignment: .leading, spacing: 6) { LT(title).font(.system(size: 15, weight: .semibold)); LT(subtitle).font(.system(size: 12)).foregroundStyle(secondary).fixedSize(horizontal: false, vertical: true) } }
     }
     private func showNotice(_ text: String) {
-        notice = text
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { if notice == text { notice = "" } }
+        let id = UUID(); noticeID = id; notice = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { if noticeID == id { notice = "" } }
+    }
+    private func adaptiveStack<Content: View>(compact: Bool, spacing: CGFloat, @ViewBuilder content: () -> Content) -> some View {
+        let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: spacing)) : AnyLayout(HStackLayout(alignment: .top, spacing: spacing))
+        return layout { content() }
     }
     private func resumeAutomation() {
         showNotice(model.resumeAuto() ? "Пауза сброшена. Запусти музыку заново." : model.resumeBlockReason ?? "Условия изменились. Проверь состояние автоматизации.")

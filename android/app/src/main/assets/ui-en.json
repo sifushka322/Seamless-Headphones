@@ -167,5 +167,15 @@
   "Не удалось сохранить ключ в защищённом хранилище": "Could not save the key in secure storage",
   "Наведи камеру на QR-код в Seamless на Mac": "Point the camera at the QR code in Seamless on your Mac",
   "Закрыть сканер": "Close scanner",
-  "Сервис ещё не запущен. Разрешение Bluetooth: {0}": "Service has not started. Bluetooth permission: {0}"
+  "Сервис ещё не запущен. Разрешение Bluetooth: {0}": "Service has not started. Bluetooth permission: {0}",
+  "✓  Ключ Mac сохранён": "✓  Mac pairing key saved",
+  "Ключ Mac ещё не добавлен": "No Mac pairing key yet",
+  "Сохранённый ключ недоступен. Добавь ключ с Mac заново.": "The saved key is unavailable. Add your Mac’s pairing key again.",
+  "После сохранения ключа нажми «Найти Mac». Mac должен быть рядом, а связь на нём — включена.": "After saving the key, tap Find Mac. Keep your Mac nearby with its connection enabled.",
+  "Чтобы заменить ключ Mac, сначала нажми «Остановить связь».": "To replace your Mac’s key, tap Stop connection first.",
+  "Камера нужна только для QR-кода. Можно вставить ключ вручную.": "The camera is only needed for QR codes. You can paste the pairing key instead.",
+  "Камера недоступна. Вставь ключ Mac вручную.": "No camera is available. Paste your Mac’s pairing key instead.",
+  "Доступ к камере": "Camera access",
+  "Камера нужна только для QR-кода. Разреши доступ в настройках приложения или вставь ключ вручную.": "The camera is only needed for QR codes. Allow camera access in the app settings, or paste the pairing key instead.",
+  "Ввести ключ вручную": "Enter key manually"
 }

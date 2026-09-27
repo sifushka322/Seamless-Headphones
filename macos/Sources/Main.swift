@@ -15,7 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if args.contains("--dark") { model.theme = "dark" }
         if args.contains("--light") { model.theme = "light" }
         let view = NSHostingView(rootView: Dashboard(model: model, initialPage: args.contains("--automation") && model.demo ? .automation : args.contains("--devices") && model.demo ? .devices : args.contains("--settings") && model.demo ? .settings : .overview))
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 790), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let compactPreview = model.demo && args.contains("--compact")
+        let visible = NSScreen.main?.visibleFrame.size ?? NSSize(width: 1080, height: 820)
+        let size = NSSize(width: compactPreview ? 800 : min(1080, visible.width), height: compactPreview ? 560 : min(790, visible.height - 40))
+        window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Seamless Headphones"; window.contentView = view; window.center(); window.isReleasedWhenClosed = false
         // Keep AppKit title bars, menus and native controls in the same theme as SwiftUI.
         // nil restores live system appearance, including changes while the app is open.
@@ -62,11 +65,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         return true
     }
-    @objc func show() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+    @objc func show() {
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    }
     @objc func toMac() { model.request("mac") }
     @objc func toPhone() { model.request("android") }
     @objc func quit() { model.disable(); NSApp.terminate(nil) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        show(); return true
+    }
 }
 
 @main struct Main {

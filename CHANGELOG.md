@@ -1,3 +1,15 @@
+# 0.5.1 — Reliability and usability audit
+
+- Harden BLE session invalidation, callback ownership, packet validation and the Android notification-subscription handshake.
+- Recheck transfer guards at each stage; require the correct device to confirm each effect and block uncertain microphone state.
+- Handle revoked Android permissions and foreground-service failures without crashing; use monotonic heartbeat timers.
+- Prevent demo mode from replacing the real Mac pairing key, hide QR after pairing, and make key recovery accessible while disconnected.
+- Preserve Android pairing drafts and scroll position; clarify saved-key status, input errors and permissions; improve contrast and accessibility.
+- Require macOS 14.2 or newer for process-based microphone protection; unknown microphone state blocks manual and automatic transfers.
+- Adapt the Mac dashboard to smaller windows and reopen it from the Dock.
+- Run Android lint as part of the build and derive artifact filenames from application versions.
+- See [audit and validation](docs/audit-0.5.1.md) for evidence and hardware limits.
+
 # 0.5.0 - Stable Production Release
 
 - Add Russian, English, and system-language selection on Mac and Android, including controls, status messages, and pairing flows.

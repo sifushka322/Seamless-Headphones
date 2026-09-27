@@ -115,7 +115,7 @@ class ResponseService : Service() {
         while (debugEvents.size > 1000) debugEvents.removeLast()
     }
     fun clearLogs() { events.clear(); debugEvents.clear(); changed?.invoke() }
-    fun diagnostics(): String = "Seamless Headphones 0.5.0 · Android\nAndroid ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}\n${Build.MANUFACTURER} ${Build.MODEL}\nBLE: $status\nАвто: $autoReason\n$selectionSummary\nТранзакция: ${transaction?.id ?: "нет"} · ${transaction?.stage ?: if (requestAt > 0) "ожидаем Mac" else "нет"}\nАудиоадаптер: ${headphones.diagnostics(address)}\nСостояние Android: ${local.json()}\nСостояние Mac: ${peer.json()} ageMs=${if (remoteAt > 0) SystemClock.elapsedRealtime() - remoteAt else -1}\nЗащита Android: $voiceDiagnostics\nАктивные источники: $observedSources\nРазрешены: ${allowed.sorted().joinToString()}\nРазрешения: media=$mediaAvailable calls=$callKnown\nАвто: enabled=$autoEnabled delayMs=$detectionDelay fastDetection=$fastDetection\nТехнические логи: $debugEnabled\n\nИстория этого Android (источник в скобках):\n" + events.reversed().joinToString("\n") + "\n\nТехнический журнал Android:\n" + debugEvents.reversed().joinToString("\n")
+    fun diagnostics(): String = "Seamless Headphones ${packageManager.getPackageInfo(packageName, 0).versionName} · Android\nAndroid ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}\n${Build.MANUFACTURER} ${Build.MODEL}\nBLE: $status\nАвто: $autoReason\n$selectionSummary\nТранзакция: ${transaction?.id ?: "нет"} · ${transaction?.stage ?: if (requestAt > 0) "ожидаем Mac" else "нет"}\nАудиоадаптер: ${headphones.diagnostics(address)}\nСостояние Android: ${local.json()}\nСостояние Mac: ${peer.json()} ageMs=${if (remoteAt > 0) SystemClock.elapsedRealtime() - remoteAt else -1}\nЗащита Android: $voiceDiagnostics\nАктивные источники: $observedSources\nРазрешены: ${allowed.sorted().joinToString()}\nРазрешения: media=$mediaAvailable calls=$callKnown\nАвто: enabled=$autoEnabled delayMs=$detectionDelay fastDetection=$fastDetection\nТехнические логи: $debugEnabled\n\nИстория этого Android (источник в скобках):\n" + events.reversed().joinToString("\n") + "\n\nТехнический журнал Android:\n" + debugEvents.reversed().joinToString("\n")
     val events = ArrayDeque<String>()
     var changed: (() -> Unit)? = null
     private data class Transaction(val id: String, val target: String, val address: String, val automatic: Boolean, val started: Long = SystemClock.elapsedRealtime(), val commands: HandoffCommands = HandoffCommands(target)) { val stage get() = commands.stage }
@@ -136,7 +136,15 @@ class ResponseService : Service() {
     override fun onBind(intent: Intent) = binder
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "stop") { stopLink(); stopSelf(); return START_NOT_STICKY }
-        startForeground(1, notification("Связываемся с Mac…"))
+        try { startForeground(1, notification("Связываемся с Mac…")) }
+        catch (_: SecurityException) {
+            stopLink(); detail = "Разреши доступ к Bluetooth на телефоне"; emit(detail)
+            return START_NOT_STICKY
+        }
+        catch (_: IllegalStateException) {
+            stopLink(); detail = "Не удалось запустить фоновую связь. Открой приложение и повтори подключение."; emit(detail)
+            return START_NOT_STICKY
+        }
         if (!running) { retryCount = 0; startLink() }
         return START_NOT_STICKY
     }
@@ -153,7 +161,7 @@ class ResponseService : Service() {
         generation++; ble?.stop(); edges.reset(); lastSent = null; remoteAt = 0; remoteArmed = false; peerHeadset = null; peerHeadsetName = ""
         control.clear(); policyMode = null; peer = ActivityState(); owner = "unknown"; trusted = false
         val secret = runCatching { SecretStore(this).load() }.getOrNull()
-        if (secret == null) { detail = "Сначала сохрани ключ с Mac"; stopLink(); return }
+        if (secret == null) { stopLink(); detail = "Сначала сохрани ключ с Mac"; emit(detail); return }
         running = true
         ble = BleClient(this, secret, { text, auth ->
             val newSession = auth && !trusted
@@ -194,6 +202,7 @@ class ResponseService : Service() {
         emit(detail); tick()
     }
     fun request(target: String) {
+        if (target !in setOf("android", "mac")) return
         manualBlockReason?.let { detail = it; changed?.invoke(); return }
         if (!trusted) { detail = "Сначала свяжи телефон с Mac"; changed?.invoke(); return }
         if (held || busy) { detail = if (held) "Сними запрет переключений на телефоне" else "Передача уже выполняется"; changed?.invoke(); return }
@@ -216,19 +225,21 @@ class ResponseService : Service() {
             }
             "autoReset" -> { if (!busy) { quietUntil = 0; edges.reset(); lastSent = null; remoteArmed = false; trace("AUTO reset; waiting for coordinator and fresh playback") } }
             "autoStatus" -> { coordinatorReason = packet.detail; autoPaused = packet.target == "paused"; remoteArmed = packet.device == "armed"; updateAutoReason(); changed?.invoke() }
-            "controlResult" -> if (control.accept(packet.id, packet.target)) {
+            "controlResult" -> if (control.accept(packet.id, packet.target, packet.device)) {
                 if (packet.target == "mode" && packet.device in setOf("idle", "follow")) policyMode = packet.device
                 controlMessage = packet.detail; detail = packet.detail; emit(packet.detail, "Mac")
             }
             "notice" -> { requestAt = 0; if (transaction == null) { detail = packet.detail; emit(packet.detail, "Mac") } }
             "prepare" -> {
                 if (packet.id.isBlank() || completed.contains(packet.id)) return
+                if (transaction?.id == packet.id) return
                 if (transaction != null) { ble?.send(Packet("error", id = packet.id, detail = "Телефон занят другой передачей")); return }
                 requestAt = 0
                 trace("PREPARE tx=${packet.id} target=${packet.target} remoteDevice=${packet.device} localDevice=$address")
                 val reason = when {
                     held -> "На телефоне включён запрет переключений"
-                    packet.detail == "auto" && (!autoEnabled || !local.available || local.call || !peer.automation || peer.call || peer.held || SystemClock.elapsedRealtime() - remoteAt > 7000) -> "Автопереключение сейчас недоступно на телефоне"
+                    packet.detail !in setOf("auto", "manual") -> "Неизвестный тип передачи"
+                    packet.detail == "auto" && !automaticAllowed(packet.target == "android") -> "Автопереключение сейчас недоступно на телефоне"
                     packet.target !in listOf("mac", "android") -> "Неизвестное направление передачи"
                     Headphones.normalize(address) != Headphones.normalize(packet.device) -> "На устройствах выбраны разные наушники. Mac: ${packet.device.ifEmpty { "не выбраны" }}; Android: ${address.ifEmpty { "не выбраны" }}. Открой «Устройства» и сравни адреса"
                     else -> headphones.preflight(address, packet.target == "android")
@@ -245,7 +256,8 @@ class ResponseService : Service() {
                 val acquire = packet.type != "release"
                 if (held) { abort("На телефоне включён запрет переключений", true); return }
                 val calls = CallGuard.read(this)
-                if (tx.automatic && (!autoEnabled || !calls.known || calls.busy || (acquire && !local.playing))) { abort("Условия автопереключения изменились", true); return }
+                if (calls.busy) { abort("Начался разговор. Передача остановлена", true); return }
+                if (tx.automatic && !automaticAllowed(acquire)) { abort("Условия автопереключения изменились", true); return }
                 trace("STAGE tx=${tx.id} stage=${tx.stage} command=${packet.type}"); detail = if (acquire) "Активно подключаем наушники…" else "Освобождаем наушники…"; changed?.invoke()
                 headphones.change(tx.address, acquire) { ok, reason, retrySafe ->
                     if (transaction?.id != tx.id) return@change
@@ -256,7 +268,7 @@ class ResponseService : Service() {
                     if (reply == "error") clearTransaction()
                 }
             }
-            "complete" -> if (transaction?.id == packet.id && transaction?.commands?.canComplete() == true) {
+            "complete" -> if (transaction?.id == packet.id && transaction?.commands?.canComplete(packet.target) == true) {
                 owner = packet.target; lastCompletedAt = SystemClock.elapsedRealtime(); routeLostAt = 0
                 lastDuration = String.format(java.util.Locale.ROOT, "%.1f с", (SystemClock.elapsedRealtime() - transaction!!.started) / 1000.0)
                 prefs.edit().putInt("transfers", successful + 1).apply(); quietUntil = 0; remoteArmed = false
@@ -264,6 +276,13 @@ class ResponseService : Service() {
             }
             "cancel" -> if (transaction?.id == packet.id) abort("Mac остановил ожидание. Уже начатое системное подключение может завершиться", false)
         }
+    }
+    private fun automaticAllowed(acquiring: Boolean): Boolean {
+        val observed = media.sample()
+        val calls = CallGuard.read(this)
+        return HandoffSafety.automaticAllowed(autoEnabled, held, observed.available, calls.known, calls.busy,
+            observed.playing.any { it in allowed }, acquiring, peer,
+            if (remoteAt == 0L) null else SystemClock.elapsedRealtime() - remoteAt)
     }
     private fun clearTransaction() {
         transaction?.let { completed.add(it.id) }

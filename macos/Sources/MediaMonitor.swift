@@ -6,6 +6,7 @@ struct MediaObservation {
     var available = false
     var active: Set<String> = []
     var microphone = false
+    var microphoneKnown = false
     var names: [String: String] = [:]
 }
 
@@ -22,14 +23,18 @@ enum MediaMonitor {
         let system = AudioObjectID(kAudioObjectSystemObject)
         var size: UInt32 = 0
         guard AudioObjectHasProperty(system, &address), AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr else { return MediaObservation() }
-        if size == 0 { return MediaObservation(available: true) }
+        if size == 0 { return MediaObservation(available: true, microphoneKnown: true) }
+        guard size % UInt32(MemoryLayout<AudioObjectID>.size) == 0 else { return MediaObservation() }
         var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
         guard ids.withUnsafeMutableBytes({ AudioObjectGetPropertyData(system, &address, 0, nil, &size, $0.baseAddress!) }) == noErr else { return MediaObservation() }
-        var result = MediaObservation(available: true)
+        var result = MediaObservation(available: true, microphoneKnown: true)
         for id in ids {
             // Input of every process, rather than the default input device, protects conferencing apps.
-            if AudioDevices.number(id, kAudioProcessPropertyIsRunningInput) == 1 { result.microphone = true }
-            guard AudioDevices.number(id, kAudioProcessPropertyIsRunningOutput) == 1 else { continue }
+            let input = AudioDevices.number(id, kAudioProcessPropertyIsRunningInput)
+            if input == 1 { result.microphone = true }
+            if input == nil { result.microphoneKnown = false; result.available = false }
+            guard let output = AudioDevices.number(id, kAudioProcessPropertyIsRunningOutput) else { result.available = false; continue }
+            guard output == 1 else { continue }
             let pid = AudioDevices.number(id, kAudioProcessPropertyPID).map { pid_t(bitPattern: $0) }
             let app = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
             let bundle = AudioDevices.string(id, kAudioProcessPropertyBundleID) ?? app?.bundleIdentifier ?? "unknown.\(id)"

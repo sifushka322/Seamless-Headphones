@@ -29,6 +29,25 @@ class WireTest {
         assertThrows(IllegalStateException::class.java) { buffer.append(ByteArray(4097) { 65 }) }
         assertEquals(listOf("one", "two"), FrameBuffer().append("one\ntwo\n".toByteArray()))
     }
+    @Test fun signedNonCanonicalSequenceAndWrongFieldTypesAreRejected() {
+        fun signed(sequence: String, payload: String): String {
+            val body = "1|$session|mac|$sequence|${java.util.Base64.getEncoder().encodeToString(payload.toByteArray())}"
+            val signature = javax.crypto.Mac.getInstance("HmacSHA256").run {
+                init(javax.crypto.spec.SecretKeySpec(key, "HmacSHA256")); doFinal(body.toByteArray())
+            }
+            return "$body|${java.util.Base64.getEncoder().encodeToString(signature)}"
+        }
+        val receiver = SecureWire(key, session, "android")
+        val valid = Packet("prepare", "tx").json().toString(Charsets.UTF_8)
+        for (sequence in listOf("+1", "01", "-1", "9223372036854775808")) {
+            assertThrows(IllegalArgumentException::class.java) { receiver.decode(signed(sequence, valid)) }
+        }
+        for (payload in listOf("""{"type":true}""", """{"type":"prepare","id":123}""", """{"type":"prepare","device":null}""")) {
+            assertThrows(Exception::class.java) { receiver.decode(signed("1", payload)) }
+        }
+        // Rejected frames must not consume the valid sequence number.
+        assertEquals("prepare", receiver.decode(signed("1", valid)).type)
+    }
     @Test fun crossLanguageGoldenVectors() {
         val root = generateSequence(File(requireNotNull(System.getProperty("user.dir")))) { it.parentFile }.first { File(it, "protocol/vectors.json").exists() }
         val data = JSONObject(File(root, "protocol/vectors.json").readText())

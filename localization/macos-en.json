@@ -8,7 +8,6 @@
   "Одна пара наушников. Два устройства.": "One pair of headphones. Two devices.",
   "Сделай Seamless своим.": "Make Seamless your own.",
   "ДЕМО · БЕЗ КОМАНД УСТРОЙСТВАМ": "DEMO · NO DEVICE COMMANDS",
-  "0.5.0 · STABLE · ЛОКАЛЬНО ПО BLUETOOTH": "0.5.0 · STABLE · LOCAL BLUETOOTH",
   "Отозвать ключ связи?": "Revoke the pairing key?",
   "Отмена": "Cancel",
   "Отозвать": "Revoke",
@@ -152,5 +151,7 @@
   "не выбраны": "not selected",
   "ожидаем сведения": "waiting for details",
   "неизвестно": "unknown",
-  "Сейчас  Деморежим — реальные команды отключены": "Now  Demo mode — device commands disabled"
+  "Сейчас  Деморежим — реальные команды отключены": "Now  Demo mode — device commands disabled",
+  "0.5.1 · STABLE · ЛОКАЛЬНО ПО BLUETOOTH": "0.5.1 · STABLE · LOCAL BLUETOOTH",
+  "Наушники не найдены. Сопряги их в настройках Bluetooth, затем обнови список.": "No headphones found. Pair them in Bluetooth settings, then refresh the list."
 }

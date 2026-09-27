@@ -2,6 +2,9 @@ package app.systemresponse
 
 import android.Manifest
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import android.content.*
@@ -12,7 +15,11 @@ import android.graphics.drawable.GradientDrawable
 import android.os.*
 import android.provider.Settings
 import android.text.InputType
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.*
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.*
 
 class MainActivity : ComponentActivity() {
@@ -20,7 +27,7 @@ class MainActivity : ComponentActivity() {
     private val settingsPrefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
     private val dark get() = when (appearance.getString("theme", "system")) { "dark" -> true; "light" -> false; else -> resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES }
     private val ink get() = Color.parseColor(if (dark) "#EDF2F0" else "#1D2D2B")
-    private val muted get() = Color.parseColor(if (dark) "#A1B0AC" else "#677C75")
+    private val muted get() = Color.parseColor(if (dark) "#A1B0AC" else "#5C7169")
     private val canvas get() = Color.parseColor(if (dark) "#101517" else "#F4F8F5")
     private val surface get() = Color.parseColor(if (dark) "#1A2224" else "#FFFFFF")
     private val accent get() = Color.parseColor(when (appearance.getString("accent", "mint")) { "cobalt" -> if (dark) "#96B4FF" else "#365ECD"; "iris" -> if (dark) "#D4ACFF" else "#814AB8"; else -> if (dark) "#80DFBC" else "#167557" })
@@ -28,6 +35,20 @@ class MainActivity : ComponentActivity() {
     private var service: ResponseService? = null
     private var bound = false
     private var page = 0
+    private var restoredScroll = 0
+    private var pendingScrollOffset: Int? = null
+    private var renderGeneration = 0
+    private val pairingDraft by lazy { ViewModelProvider(this)[PairingDraft::class.java] }
+    private var keyField: EditText? = null
+    private var pairingStatus: TextView? = null
+    private var pairingExplanation: TextView? = null
+    private var scanButton: Button? = null
+    private var saveKeyButton: Button? = null
+    private var forgetButton: Button? = null
+    private var setupCard: View? = null
+    private var headsetTitle: TextView? = null
+    private enum class PairingState { EMPTY, SAVED, UNAVAILABLE }
+    private var pairingState = PairingState.EMPTY
     private lateinit var content: LinearLayout
     private lateinit var navigation: LinearLayout
     private lateinit var scroll: ScrollView
@@ -52,6 +73,10 @@ class MainActivity : ComponentActivity() {
     private var holdExplanation: TextView? = null
     private var clearHistoryButton: Button? = null
     private var syncingControls = false
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) launchScanner()
+        else toast("Камера нужна только для QR-кода. Можно вставить ключ вручную.")
+    }
     private val qrScanner = registerForActivityResult(ScanContract()) { result ->
         result.contents?.let { raw ->
             val code = runCatching { PairingCode.parse(raw) }.getOrNull()
@@ -69,6 +94,8 @@ class MainActivity : ComponentActivity() {
                 if (service?.running == true) { toast("Сначала останови связь"); return@setPositiveButton }
                 try {
                     SecretStore(this).save(code.key)
+                    pairingState = PairingState.SAVED
+                    pairingDraft.key = ""
                     if (headset != null) service?.address = headset.address
                     toast("Ключ сохранён. Нажми «Найти Mac»"); render()
                 } catch (_: Exception) { toast("Не удалось сохранить ключ в защищённом хранилище") }
@@ -82,7 +109,8 @@ class MainActivity : ComponentActivity() {
     private var picker: Spinner? = null
     private var holdSwitch: Switch? = null
     private var devices = emptyList<android.bluetooth.BluetoothDevice>()
-    private var pendingAction: (() -> Unit)? = null
+    private enum class BluetoothAction { REFRESH_DEVICES, START_CONNECTION }
+    private var pendingBluetoothAction: BluetoothAction? = null
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             service = (binder as ResponseService.LocalBinder).service; service?.changed = ::refresh; render()
@@ -94,6 +122,7 @@ class MainActivity : ComponentActivity() {
         text = if (localize) L.text(this@MainActivity, value) else value; textSize = size; setTextColor(if (secondary) muted else ink)
         if (!localize) tag = "user-content"
         if (bold) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        isAccessibilityHeading = bold && size >= 17f
         setLineSpacing(dp(3).toFloat(), 1f)
         layoutParams = LinearLayout.LayoutParams(-1, -2)
     }
@@ -104,6 +133,11 @@ class MainActivity : ComponentActivity() {
         arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf(android.R.attr.state_checked), intArrayOf()),
         intArrayOf(tint(muted, 95), on, off))
     private fun availability(view: View?, enabled: Boolean) { view?.isEnabled = enabled; view?.alpha = if (enabled) 1f else .45f }
+    private fun updateText(view: TextView?, value: String) {
+        view ?: return
+        val localized = L.text(this, value)
+        if (view.text.toString() != localized) view.text = localized
+    }
     private fun stack(padding: Int = 0) = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(padding), dp(padding), dp(padding), dp(padding)) }
     private fun gap(parent: LinearLayout, value: Int = 12) { parent.addView(View(this), LinearLayout.LayoutParams(1, dp(value))) }
     private fun card(parent: LinearLayout = content, action: (LinearLayout) -> Unit): LinearLayout {
@@ -123,7 +157,7 @@ class MainActivity : ComponentActivity() {
         layoutParams = LinearLayout.LayoutParams(-2, -2)
     }
     private fun toggle(parent: LinearLayout, title: String, subtitle: String, value: Boolean, action: (Boolean) -> Unit): Switch {
-        val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(54) }
+        val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(54); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         val labels = stack().apply { addView(text(title, 15f, true)); gap(this, 5); addView(text(subtitle, 12f, secondary = true)) }
         row.addView(labels, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(14) })
         val control = Switch(this).apply {
@@ -131,11 +165,16 @@ class MainActivity : ComponentActivity() {
             thumbTintList = controlColors(); trackTintList = controlColors(tint(accent, 105), tint(muted, 65))
             setOnCheckedChangeListener { _, on -> if (!syncingControls) action(on) }
         }
+        // Tapping the explanation should be as easy as tapping the small switch thumb.
+        row.setOnClickListener { if (control.isEnabled) control.performClick() }
         row.addView(control); parent.addView(row); return control
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(if (dark) R.style.AppThemeDark else R.style.AppTheme)
-        super.onCreate(savedInstanceState); page = savedInstanceState?.getInt("page") ?: 0
+        super.onCreate(savedInstanceState); page = (savedInstanceState?.getInt("page") ?: 0).coerceIn(0, 3)
+        restoredScroll = savedInstanceState?.getInt("scroll") ?: 0
+        pendingBluetoothAction = savedInstanceState?.getString("bluetoothAction")?.let { saved -> BluetoothAction.entries.firstOrNull { it.name == saved } }
+        readPairingState()
         window.statusBarColor = canvas; window.navigationBarColor = canvas
         val root = stack().apply { setBackgroundColor(canvas) }
         root.setOnApplyWindowInsetsListener { view, insets -> val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime()); view.setPadding(bars.left, bars.top, bars.right, bars.bottom); insets }
@@ -148,11 +187,27 @@ class MainActivity : ComponentActivity() {
         render()
         if (bluetoothGranted()) bind()
     }
-    override fun onSaveInstanceState(outState: Bundle) { outState.putInt("page", page); super.onSaveInstanceState(outState) }
-    override fun onResume() { super.onResume(); if (bluetoothGranted()) bind(); if (::content.isInitialized) refresh() }
-    private fun rerenderKeepingScroll() { val offset = scroll.scrollY; render(); scroll.post { scroll.scrollTo(0, offset) } }
-    private fun render() {
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("page", page); outState.putInt("scroll", pendingScrollOffset ?: scroll.scrollY)
+        outState.putString("bluetoothAction", pendingBluetoothAction?.name)
+        super.onSaveInstanceState(outState)
+    }
+    override fun onResume() { super.onResume(); readPairingState(); if (bluetoothGranted()) bind(); if (::content.isInitialized) { if (page == 2) refreshDevices(); refresh() } }
+    private fun rerenderKeepingScroll() = render()
+    private fun navigateTo(index: Int) {
+        if (index == page) { scroll.scrollTo(0, 0); return }
+        currentFocus?.let { getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(it.windowToken, 0) }
+        page = index; restoredScroll = 0; render(keepScroll = false)
+    }
+    private fun render(keepScroll: Boolean = true) {
+        val offset = if (!keepScroll) 0 else pendingScrollOffset ?: if (content.childCount == 0) restoredScroll else scroll.scrollY
+        pendingScrollOffset = offset
+        val generation = ++renderGeneration
+        val editingKey = keyField?.hasFocus() == true && page == 2
+        val keySelection = keyField?.selectionStart ?: 0
         content.removeAllViews(); navigation.removeAllViews()
+        keyField = null; pairingStatus = null; pairingExplanation = null; scanButton = null; saveKeyButton = null; forgetButton = null
+        setupCard = null; headsetTitle = null
         status = null; detail = null; autoStatus = null; mediaPermission = null; callPermission = null; logView = null; debugView = null; selectionView = null; matchButton = null; resumeButton = null; metrics = null; ownerText = null
         connect = null; toMac = null; toPhone = null; picker = null; holdSwitch = null
         resumeExplanation = null; manualExplanation = null; modeStatus = null; controlFeedback = null
@@ -165,16 +220,21 @@ class MainActivity : ComponentActivity() {
                 orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; minimumHeight = dp(72)
                 isClickable = true; isFocusable = true; isSelected = index == page
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+                accessibilityDelegate = object : View.AccessibilityDelegate() {
+                    override fun onInitializeAccessibilityNodeInfo(host: View, info: android.view.accessibility.AccessibilityNodeInfo) {
+                        super.onInitializeAccessibilityNodeInfo(host, info); info.className = Button::class.java.name
+                    }
+                }
                 background = shape(if (index == page) tint(accent, 24) else Color.TRANSPARENT, 14)
                 addView(ImageView(this@MainActivity).apply {
                     setImageResource(icons[index]); imageTintList = android.content.res.ColorStateList.valueOf(color)
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 }, LinearLayout.LayoutParams(dp(24), dp(24)))
                 addView(text(title, 12f, index == page).apply {
-                    gravity = Gravity.CENTER; setTextColor(color); setSingleLine(true)
+                    gravity = Gravity.CENTER; setTextColor(color)
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4) })
-                contentDescription = title; setOnClickListener { page = index; render(); scroll.scrollTo(0, 0) }
+                contentDescription = title; setOnClickListener { navigateTo(index) }
             }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(1); marginEnd = dp(1) })
         }
         content.addView(text("SEAMLESS  /  HEADPHONES", 11f, true).apply { letterSpacing = .16f; setTextColor(accent) }); gap(content, 16)
@@ -182,21 +242,24 @@ class MainActivity : ComponentActivity() {
         content.addView(text(listOf("Музыка продолжается. Устройства меняются.", "Разрешения, источники и защита от лишних передач.", "Настрой связь один раз. Дальше просто слушай.", "Оформление, связь и история событий.")[page], 13f, secondary = true)); gap(content, 24)
         content.addView(button("Скопировать диагностику") { copyDiagnostics() }); gap(content, 12)
         when (page) { 0 -> overview(); 1 -> automation(); 2 -> devicePage(); else -> settings() }
-        gap(content, 8); content.addView(text("0.5.0  ·  БЕЗ ОБЛАКА  ·  БЕЗ ТЕЛЕМЕТРИИ", 10f, secondary = true).apply { letterSpacing = .10f }); refresh()
+        gap(content, 8); content.addView(text("0.5.1  ·  БЕЗ ОБЛАКА  ·  БЕЗ ТЕЛЕМЕТРИИ", 10f, secondary = true).apply { letterSpacing = .10f }); refresh()
+        if (editingKey) keyField?.let { it.requestFocus(); it.setSelection(keySelection.coerceIn(0, it.length())) }
+        scroll.post { if (!isDestroyed && generation == renderGeneration) { scroll.scrollTo(0, offset); pendingScrollOffset = null } }
     }
     private fun overview() {
         val s = service
-        if (s?.trusted != true || s.address.isEmpty()) card { c ->
+        setupCard = card { c ->
             c.addView(text("Начнём с подключения", 17f, true)); gap(c, 7); c.addView(text("Выбери наушники и добавь ключ своего Mac.", 13f, secondary = true))
-            c.addView(button("Настроить устройства", true) { page = 2; render() })
+            c.addView(button("Настроить устройства", true) { navigateTo(2) })
         }
         card { c ->
             c.background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(blend(surface, accent, .10f), surface)).apply { cornerRadius = dp(22).toFloat() }
             ownerText = pill("ГОТОВИМСЯ К ПОДКЛЮЧЕНИЮ"); c.addView(ownerText); gap(c, 18)
             val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-            val labels = stack(); labels.addView(text(selectedName(), 23f, true, localize = false)); gap(labels, 8); labels.addView(text("Слушай там, где удобно.", 12f, secondary = true))
+            val labels = stack(); headsetTitle = text(selectedName(), 23f, true, localize = false); labels.addView(headsetTitle); gap(labels, 8); labels.addView(text("Слушай там, где удобно.", 12f, secondary = true))
             row.addView(labels, LinearLayout.LayoutParams(0, -2, 1f)); row.addView(HeadphonesArt(this, accent), LinearLayout.LayoutParams(dp(102), dp(110))); c.addView(row); gap(c, 10)
-            status = text("Связь выключена", 12f, secondary = true); c.addView(status)
+            status = text("Связь выключена", 12f, secondary = true).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }; c.addView(status)
+            connect = button("Найти Mac", true) { toggleConnection() }; c.addView(connect)
         }
         card { c ->
             c.addView(text("Куда передать звук", 17f, true)); gap(c, 8)
@@ -207,7 +270,7 @@ class MainActivity : ComponentActivity() {
         }
         card { c ->
             c.addView(text("✦  Автопереключение", 17f, true)); gap(c, 8); autoStatus = text("Ожидаем подключение", 13f, secondary = true); c.addView(autoStatus)
-            c.addView(button("Настроить автоматизацию") { page = 1; render() })
+            c.addView(button("Настроить автоматизацию") { navigateTo(1) })
         }
         card { c ->
             holdSwitch = toggle(c, "Запретить переключения", "Блокирует автоматические и ручные передачи. Само по себе не подключает наушники к телефону.", s?.held == true) { service?.hold(it) }
@@ -279,7 +342,7 @@ class MainActivity : ComponentActivity() {
     private fun devicePage() {
         card { c ->
             c.addView(text("01  /  Твои наушники", 17f, true)); gap(c, 8); c.addView(text("Сопряги одну и ту же пару с телефоном и Mac в настройках Bluetooth.", 13f, secondary = true)); gap(c, 12)
-            picker = Spinner(this).apply { minimumHeight = dp(48) }; c.addView(picker)
+            picker = Spinner(this).apply { minimumHeight = dp(48); contentDescription = L.text(this@MainActivity, "Выбрать наушники") }; c.addView(picker)
             refreshDevices()
             picker?.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(parent: AdapterView<*>?, view: View?, pos: Int, id: Long) { if (pos > 0 && pos <= devices.size && service?.address != devices[pos - 1].address) service?.address = devices[pos - 1].address }
@@ -293,41 +356,42 @@ class MainActivity : ComponentActivity() {
                 else toast("Сначала сопряги эти наушники с телефоном в настройках Bluetooth")
             }; c.addView(matchButton)
             c.addView(button(if (bluetoothGranted()) "Обновить список наушников" else "Разрешить Bluetooth") {
-                withBluetooth {
-                    if (!bound) bind() else {
-                        refreshDevices()
-                        toast(if (devices.isEmpty()) "Сопряжённых наушников пока нет. Добавь их в настройках Bluetooth" else "Список обновлён: ${devices.size}")
-                    }
-                }
+                withBluetooth(BluetoothAction.REFRESH_DEVICES)
             })
             c.addView(button("Настройки Bluetooth") { openSettings(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) })
         }
         card { c ->
             c.addView(text("02  /  Добавь свой Mac", 17f, true)); gap(c, 8); c.addView(text("На Mac открой «Устройства → Связать телефон» и перенеси ключ сюда.", 13f, secondary = true)); gap(c, 12)
-            c.addView(button("Сканировать QR с Mac", true) {
-                if (service?.running == true) { toast("Сначала останови связь"); return@button }
-                qrScanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                    .setPrompt("")
-                    .setBeepEnabled(false).setBarcodeImageEnabled(false).setOrientationLocked(false)
-                    .setCaptureActivity(PairingScannerActivity::class.java))
-            }); gap(c, 12)
+            pairingStatus = text("", 13f, true).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }; c.addView(pairingStatus)
+            scanButton = button("Сканировать QR с Mac", true) { requestScanner() }; c.addView(scanButton); gap(c, 12)
             c.addView(text("Или вставь ключ вручную", 12f, secondary = true))
-            val key = EditText(this).apply { hint = "Ключ связи с Mac"; setSingleLine(); textSize = 14f; setTextColor(ink); setHintTextColor(muted); backgroundTintList = android.content.res.ColorStateList.valueOf(accent); minHeight = dp(52); inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO; isSaveEnabled = false }
+            val key = EditText(this).apply {
+                hint = L.text(this@MainActivity, "Ключ связи с Mac"); setSingleLine(); textSize = 14f; setTextColor(ink); setHintTextColor(muted)
+                backgroundTintList = android.content.res.ColorStateList.valueOf(accent); minHeight = dp(52)
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO; isSaveEnabled = false
+                imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+                setText(pairingDraft.key)
+                addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(value: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(value: CharSequence?, start: Int, before: Int, count: Int) { pairingDraft.key = value?.toString().orEmpty(); error = null }
+                    override fun afterTextChanged(value: Editable?) {}
+                })
+                setOnEditorActionListener { _, action, _ -> if (action == EditorInfo.IME_ACTION_DONE) { savePairingKey(); true } else false }
+            }
+            keyField = key
             c.addView(key)
-            c.addView(button("Сохранить ключ") {
-                if (service?.running == true) { toast("Сначала останови связь"); return@button }
-                try { SecretStore(this).save(key.text.toString()); key.text.clear(); toast("Ключ сохранён в защищённом хранилище") } catch (_: Exception) { toast("Проверь 44 символа ключа Base64 с Mac") }
-            }); gap(c, 14)
-            status = text("", 13f, true); c.addView(status)
-            connect = button("Найти Mac", true) {
-                if (service?.running == true) service?.stopLink()
-                else if (runCatching { SecretStore(this).load() }.getOrNull() == null) toast("Сначала сканируй QR-код или сохрани ключ своего Mac")
-                else withBluetooth { startForegroundService(Intent(this, ResponseService::class.java)) }
-            }; c.addView(connect)
-            c.addView(button("Забыть Mac") {
+            saveKeyButton = button("Сохранить ключ") { savePairingKey() }; c.addView(saveKeyButton)
+            pairingExplanation = text("", 12f, secondary = true); gap(c, 8); c.addView(pairingExplanation); gap(c, 14)
+            status = text("", 13f, true).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }; c.addView(status)
+            connect = button("Найти Mac", true) { toggleConnection() }; c.addView(connect)
+            forgetButton = button("Забыть Mac") {
                 android.app.AlertDialog.Builder(this).setTitle(L.text(this, "Удалить ключ Mac?")).setMessage(L.text(this, "Для следующего подключения потребуется снова добавить ключ."))
-                    .setNegativeButton(L.text(this, "Отмена"), null).setPositiveButton(L.text(this, "Удалить")) { _, _ -> service?.stopLink(); SecretStore(this).clear(); toast("Ключ удалён"); refresh() }.show()
-            })
+                    .setNegativeButton(L.text(this, "Отмена"), null).setPositiveButton(L.text(this, "Удалить")) { _, _ ->
+                        service?.stopLink(); SecretStore(this).clear(); pairingState = PairingState.EMPTY
+                        pairingDraft.key = ""; keyField?.text?.clear(); toast("Ключ удалён"); refresh()
+                    }.show()
+            }; c.addView(forgetButton)
         }
         card { c -> c.addView(text("Совместимость", 17f, true)); gap(c, 8); c.addView(text("Android может запрещать программное подключение A2DP. При отказе Seamless покажет причину и остановит автоматику. Первую передачу проверь со своей музыкой.", 13f, secondary = true)) }
         detail = text("", 12f, secondary = true); content.addView(detail)
@@ -344,7 +408,7 @@ class MainActivity : ComponentActivity() {
                         service?.refreshNotificationLanguage()
                         recreate()
                     }
-                }.apply { isSelected = selected; contentDescription = "language-$id" })
+                }.apply { isSelected = selected; tag = "language-$id"; contentDescription = L.text(this@MainActivity, "Язык") + ": " + L.text(this@MainActivity, title) })
             }
         }
         card { c ->
@@ -376,21 +440,83 @@ class MainActivity : ComponentActivity() {
         card { c -> c.addView(text("Приватность по умолчанию", 17f, true)); gap(c, 8); c.addView(text("Без аккаунта и интернета. Ключ хранится в Android Keystore. Звук не записывается, содержимое уведомлений не читается. По BLE передаются только команды и состояния воспроизведения.", 13f, secondary = true)) }
     }
     private fun copyDiagnostics() {
-        val report = service?.diagnostics() ?: "Seamless Headphones 0.5.0 · Android ${Build.VERSION.RELEASE}\n${Build.MANUFACTURER} ${Build.MODEL}\nСервис ещё не запущен. Разрешение Bluetooth: ${bluetoothGranted()}"
+        val report = service?.diagnostics() ?: "Seamless Headphones 0.5.1 · Android ${Build.VERSION.RELEASE}\n${Build.MANUFACTURER} ${Build.MODEL}\nСервис ещё не запущен. Разрешение Bluetooth: ${bluetoothGranted()}"
         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Seamless Headphones", L.text(this, report)))
         toast("Диагностика скопирована — вставь её в сообщение")
     }
+    private fun readPairingState() {
+        pairingState = try { if (SecretStore(this).load() == null) PairingState.EMPTY else PairingState.SAVED }
+        catch (_: Exception) { PairingState.UNAVAILABLE }
+    }
+    private fun savePairingKey() {
+        val field = keyField ?: return
+        if (service?.running == true) { toast("Сначала останови связь"); return }
+        try {
+            SecretStore(this).save(field.text.toString())
+            pairingState = PairingState.SAVED; field.text.clear(); field.clearFocus()
+            getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(field.windowToken, 0)
+            toast("Ключ сохранён в защищённом хранилище"); refresh()
+        } catch (_: IllegalArgumentException) {
+            field.error = L.text(this, "Проверь 44 символа ключа Base64 с Mac"); field.requestFocus()
+        } catch (_: Exception) {
+            field.error = L.text(this, "Не удалось сохранить ключ в защищённом хранилище"); field.requestFocus()
+        }
+    }
+    private fun toggleConnection() {
+        if (service?.running == true) { service?.stopLink(); return }
+        readPairingState()
+        if (pairingState != PairingState.SAVED) {
+            if (page != 2) navigateTo(2)
+            toast(if (pairingState == PairingState.UNAVAILABLE) "Сохранённый ключ недоступен. Добавь ключ с Mac заново." else "Сначала сканируй QR-код или сохрани ключ своего Mac")
+            refresh(); return
+        }
+        withBluetooth(BluetoothAction.START_CONNECTION)
+    }
+    private fun requestScanner() {
+        if (service?.running == true) { toast("Сначала останови связь"); return }
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            toast("Камера недоступна. Вставь ключ Mac вручную."); keyField?.requestFocus(); return
+        }
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) { launchScanner(); return }
+        if (settingsPrefs.getBoolean("askedCamera", false) && !shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)) {
+            android.app.AlertDialog.Builder(this).setTitle(L.text(this, "Доступ к камере"))
+                .setMessage(L.text(this, "Камера нужна только для QR-кода. Разреши доступ в настройках приложения или вставь ключ вручную."))
+                .setNegativeButton(L.text(this, "Ввести ключ вручную"), null)
+                .setPositiveButton(L.text(this, "Настройки разрешений приложения")) { _, _ -> appSettings() }.show()
+            return
+        }
+        settingsPrefs.edit().putBoolean("askedCamera", true).apply()
+        cameraPermission.launch(Manifest.permission.CAMERA)
+    }
+    private fun launchScanner() {
+        qrScanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt("")
+            .setBeepEnabled(false).setBarcodeImageEnabled(false).setOrientationLocked(false)
+            .setCaptureActivity(PairingScannerActivity::class.java))
+    }
     private fun refresh() {
         val s = service
-        status?.text = s?.status ?: if (bluetoothGranted()) "Запускаем сервис…" else "Нужно разрешение Bluetooth"
+        setupCard?.visibility = if (pairingState == PairingState.SAVED && !settingsPrefs.getString("headphones", "").isNullOrBlank()) View.GONE else View.VISIBLE
+        headsetTitle?.text = selectedName()
+        updateText(status, s?.status ?: if (bluetoothGranted()) "Запускаем сервис…" else "Нужно разрешение Bluetooth")
         detail?.text = s?.detail ?: "Начни с настройки устройств."
         autoStatus?.text = s?.let { "${it.autoReason}\n\nМузыка: ${it.observedSources}\nЗащита: ${it.local.guardReason ?: "ожидаем проверку"}" }
             ?: if (settingsPrefs.getBoolean("auto", true)) "Автоматика включена. Для работы разреши Bluetooth и свяжи телефон с Mac." else "Автопереключение выключено. Ручные передачи остаются доступны после подключения Mac."
-        mediaPermission?.text = if (s?.mediaAvailable == true) "✓  Медиасессии доступны" else "1. Нужен доступ к медиасессиям"
-        callPermission?.text = if (s?.callKnown == true) "✓  Защита вызовов доступна" else "2. Нужен доступ к состоянию вызовов"
-        mediaPermissionButton?.text = if (s?.mediaAvailable == true) "Настройки доступа к медиасессиям" else "Разрешить медиасессии"
-        callPermissionButton?.text = if (s?.callKnown == true) "Настройки разрешений приложения" else "Разрешить защиту звонков"
+        val mediaGranted = s?.mediaAvailable ?: getSystemService(android.app.NotificationManager::class.java).isNotificationListenerAccessGranted(ComponentName(this, MediaListener::class.java))
+        val callsGranted = s?.callKnown ?: (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED || !packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY))
+        mediaPermission?.text = if (mediaGranted) "✓  Медиасессии доступны" else "1. Нужен доступ к медиасессиям"
+        callPermission?.text = if (callsGranted) "✓  Защита вызовов доступна" else "2. Нужен доступ к состоянию вызовов"
+        mediaPermissionButton?.text = if (mediaGranted) "Настройки доступа к медиасессиям" else "Разрешить медиасессии"
+        callPermissionButton?.text = if (callsGranted) "Настройки разрешений приложения" else "Разрешить защиту звонков"
         connect?.text = if (s?.running == true) "Остановить связь" else "Найти Mac"
+        updateText(pairingStatus, when (pairingState) {
+            PairingState.SAVED -> "✓  Ключ Mac сохранён"
+            PairingState.EMPTY -> "Ключ Mac ещё не добавлен"
+            PairingState.UNAVAILABLE -> "Сохранённый ключ недоступен. Добавь ключ с Mac заново."
+        })
+        val canEditPairing = s?.running != true
+        availability(scanButton, canEditPairing); availability(saveKeyButton, canEditPairing); availability(keyField, canEditPairing)
+        availability(forgetButton, pairingState != PairingState.EMPTY)
+        pairingExplanation?.text = if (canEditPairing) "После сохранения ключа нажми «Найти Mac». Mac должен быть рядом, а связь на нём — включена." else "Чтобы заменить ключ Mac, сначала нажми «Остановить связь»."
         val manualBlock = s?.manualBlockReason ?: if (s == null) "Разреши Bluetooth и свяжи телефон с Mac в разделе «Устройства»." else null
         availability(toMac, manualBlock == null); availability(toPhone, manualBlock == null)
         manualExplanation?.text = manualBlock ?: "Передача занимает несколько секунд. Подключение получателя и отключение источника идут параллельно."
@@ -399,7 +525,7 @@ class MainActivity : ComponentActivity() {
         availability(resumeButton, resumeBlock == null && s?.resumePending != true)
         resumeButton?.text = if (s?.resumePending == true) "Ждём подтверждение Mac…" else "Снять паузу автоматики"
         resumeExplanation?.text = resumeBlock ?: "Сбрасывает ожидание после передачи или ошибки. Затем запусти музыку заново. Не включает выключенную автоматику."
-        controlFeedback?.text = s?.controlMessage.orEmpty()
+        updateText(controlFeedback, s?.controlMessage.orEmpty())
         controlFeedback?.visibility = if (s?.controlMessage.isNullOrBlank()) View.GONE else View.VISIBLE
         val modeBlock = s?.modeBlockReason ?: if (s == null) "Для выбора правила свяжи телефон с Mac." else null
         val mode = s?.policyMode
@@ -409,13 +535,13 @@ class MainActivity : ComponentActivity() {
         followButton?.isSelected = mode == "follow"; idleButton?.isSelected = mode == "idle"
         availability(followButton, modeBlock == null && !pending && mode != "follow")
         availability(idleButton, modeBlock == null && !pending && mode != "idle")
-        modeStatus?.text = listOfNotNull(
+        updateText(modeStatus, listOfNotNull(
             when (mode) { "follow" -> "На Mac выбрано: следовать новому воспроизведению"; "idle" -> "На Mac выбрано: только когда источник на паузе"; else -> "Правило Mac ещё не получено" },
             if (pending) "Ждём подтверждение изменения от Mac…" else modeBlock,
             s?.controlMessage?.takeIf { it.isNotBlank() }
-        ).joinToString("\n\n")
+        ).joinToString("\n\n"))
         selectionView?.text = s?.selectionSummary ?: "Разреши Bluetooth, чтобы выбрать наушники"
-        selectionView?.setTextColor(if (s?.selectionMismatch == true) Color.rgb(200, 110, 50) else muted)
+        selectionView?.setTextColor(if (s?.selectionMismatch == true) Color.parseColor(if (dark) "#FFB580" else "#A14F1C") else muted)
         matchButton?.visibility = if (s?.selectionMismatch == true) View.VISIBLE else View.GONE
         matchButton?.isEnabled = s?.busy != true
         debugView?.text = if (s?.debugEnabled == true) s.debugEvents.take(40).joinToString("\n\n").ifBlank { L.text(this, "Ожидаем события…") } else L.text(this, if (settingsPrefs.getBoolean("debug", false)) "Логи включены. Разреши Bluetooth, чтобы запустить сервис" else "Технический журнал выключен")
@@ -439,7 +565,19 @@ class MainActivity : ComponentActivity() {
         requestPermissions(arrayOf(Manifest.permission.READ_PHONE_STATE), 2)
     }
     private fun bluetoothGranted() = checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-    private fun withBluetooth(action: () -> Unit) {
+    private fun performBluetoothAction(action: BluetoothAction) {
+        if (!bound) bind()
+        when (action) {
+            BluetoothAction.START_CONNECTION -> try { startForegroundService(Intent(this, ResponseService::class.java)); Unit }
+                catch (_: SecurityException) { toast("Разреши «Устройства поблизости» в настройках приложения") }
+                catch (_: IllegalStateException) { toast("Не удалось запустить фоновую связь. Открой приложение и повтори подключение.") }
+            BluetoothAction.REFRESH_DEVICES -> {
+                refreshDevices()
+                if (service != null) toast(if (devices.isEmpty()) "Сопряжённых наушников пока нет. Добавь их в настройках Bluetooth" else "Список обновлён: ${devices.size}")
+            }
+        }
+    }
+    private fun withBluetooth(action: BluetoothAction) {
         val required = mutableListOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) required.add(Manifest.permission.POST_NOTIFICATIONS)
         val missing = required.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
@@ -447,14 +585,14 @@ class MainActivity : ComponentActivity() {
         if (settingsPrefs.getBoolean("askedBluetooth", false) && blockedBluetooth.any { !shouldShowRequestPermissionRationale(it) }) {
             toast("Разреши «Устройства поблизости» в настройках приложения"); appSettings(); return
         }
-        if (missing.isEmpty()) { if (!bound) bind(); action() } else {
+        if (missing.isEmpty()) performBluetoothAction(action) else {
             if (blockedBluetooth.isNotEmpty()) settingsPrefs.edit().putBoolean("askedBluetooth", true).apply()
-            pendingAction = action; requestPermissions(missing.toTypedArray(), 1)
+            pendingBluetoothAction = action; requestPermissions(missing.toTypedArray(), 1)
         }
     }
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1) { val action = pendingAction; pendingAction = null; if (bluetoothGranted()) { if (!bound) bind(); action?.invoke() } else toast("Разреши устройства поблизости в настройках приложения") }
+        if (requestCode == 1) { val action = pendingBluetoothAction; pendingBluetoothAction = null; if (bluetoothGranted()) { if (!bound) bind(); action?.let(::performBluetoothAction) } else toast("Разреши устройства поблизости в настройках приложения") }
         if (requestCode == 2 && checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) toast("Автоматика ждёт разрешение на защиту звонков. Ручные передачи можно проверить отдельно")
         refresh()
     }
@@ -480,6 +618,12 @@ class MainActivity : ComponentActivity() {
     private fun toast(message: String) { Toast.makeText(this, L.text(this, message), Toast.LENGTH_LONG).show() }
     override fun onDestroy() { service?.changed = null; if (bound) unbindService(connection); super.onDestroy() }
     private fun blend(a: Int, b: Int, f: Float) = Color.rgb((Color.red(a)*(1-f)+Color.red(b)*f).toInt(), (Color.green(a)*(1-f)+Color.green(b)*f).toInt(), (Color.blue(a)*(1-f)+Color.blue(b)*f).toInt())
+}
+
+/** Keep an unfinished key through rotation without putting plaintext into saved state or preferences. */
+class PairingDraft : ViewModel() {
+    var key = ""
+    override fun onCleared() { key = "" }
 }
 
 private class HeadphonesArt(context: Context, private val accent: Int) : View(context) {

@@ -5,6 +5,14 @@ import Foundation
         var count = 0
         func check(_ condition: @autoclosure () -> Bool, _ title: String) { precondition(condition(), title); count += 1; print("PASS \(title)") }
         for target in ["mac", "android"] {
+            let origin = Transfer(target: target, id: "origin")
+            check(origin.acceptsOrigin(Packet(type: "ready"), fromPeer: true), "readiness must come from peer for \(target)")
+            check(!origin.acceptsOrigin(Packet(type: "ready"), fromPeer: false), "local callback cannot fabricate peer readiness for \(target)")
+            for type in ["released", "result", "earlyResult", "retryable"] {
+                let fromPeer = type == "released" ? target == "mac" : target == "android"
+                check(origin.acceptsOrigin(Packet(type: type), fromPeer: fromPeer), "\(type) accepted from the device executing it for \(target)")
+                check(!origin.acceptsOrigin(Packet(type: type), fromPeer: !fromPeer), "\(type) rejected from the other device for \(target)")
+            }
             for order in [["released", "result"], ["result", "released"]] {
                 var tx = Transfer(target: target, id: "t", mode: .parallel)
                 check(!tx.accept(Packet(type: "result", id: "t")), "no result before command")

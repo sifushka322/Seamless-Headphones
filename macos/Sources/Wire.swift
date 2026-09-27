@@ -40,6 +40,7 @@ final class SecureWire {
         key = SymmetricKey(data: secret); self.session = session; self.role = role
     }
     func encode(_ packet: Packet) throws -> Data {
+        guard outgoing < UInt64.max else { throw WireError.replay }
         outgoing += 1
         let payload = try JSONEncoder().encode(packet).base64EncodedString()
         let body = "1|\(session)|\(role)|\(outgoing)|\(payload)"
@@ -53,7 +54,7 @@ final class SecureWire {
         let parts = frame.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 6, parts[0] == "1", parts[1] == session,
               parts[2] == (role == "mac" ? "android" : "mac"),
-              let sequence = UInt64(parts[3]), sequence > incoming,
+              let sequence = UInt64(parts[3]), String(sequence) == parts[3], sequence > incoming,
               let payload = Data(base64Encoded: parts[4]), let signature = Data(base64Encoded: parts[5])
         else { throw WireError.invalid }
         let body = Data(parts.prefix(5).joined(separator: "|").utf8)
@@ -94,6 +95,16 @@ struct Transfer {
     var elapsed: Double { ProcessInfo.processInfo.systemUptime - clockStarted }
     init(target: String, now: Date = Date(), id: String = UUID().uuidString, mode: HandoffMode = .sequential) {
         self.id = id; self.target = target; started = now; self.mode = mode
+    }
+    /// Each acknowledgement must come from the device that performed that effect.
+    /// A peer response cannot substitute for the local OS's route confirmation.
+    func acceptsOrigin(_ packet: Packet, fromPeer: Bool) -> Bool {
+        switch packet.type {
+        case "ready": return fromPeer
+        case "released": return fromPeer == (target == "mac")
+        case "result", "earlyResult", "retryable": return fromPeer == (target == "android")
+        default: return false
+        }
     }
     mutating func accept(_ packet: Packet) -> Bool {
         actions = []

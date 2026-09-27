@@ -13,7 +13,11 @@ data class Packet(val type: String, val id: String = "", val target: String = ""
     companion object {
         fun decode(data: ByteArray): Packet {
             val obj = JSONObject(String(data, StandardCharsets.UTF_8))
-            return Packet(obj.getString("type"), obj.optString("id"), obj.optString("target"), obj.optString("detail"), obj.optString("device"))
+            fun string(name: String, required: Boolean = false): String {
+                if (!obj.has(name) && !required) return ""
+                return obj.get(name) as? String ?: error("Packet field must be a string")
+            }
+            return Packet(string("type", true), string("id"), string("target"), string("detail"), string("device"))
         }
     }
 }
@@ -36,17 +40,18 @@ class SecureWire(private val key: ByteArray, val session: String, private val ro
     init { require(key.size == 32) }
     private fun hmac(bytes: ByteArray): ByteArray = Mac.getInstance("HmacSHA256").run { init(SecretKeySpec(key, "HmacSHA256")); doFinal(bytes) }
     fun encode(packet: Packet): ByteArray {
+        check(outgoing < Long.MAX_VALUE)
         val payload = Base64.getEncoder().encodeToString(packet.json())
         val body = "1|$session|$role|${++outgoing}|$payload"
         val signature = Base64.getEncoder().encodeToString(hmac(body.toByteArray(StandardCharsets.UTF_8)))
         return "$body|$signature\n".toByteArray(StandardCharsets.UTF_8).also { require(it.size <= 4096) }
     }
     fun decode(frame: String): Packet {
-        require(frame.length <= 4096)
+        require(frame.length <= 4096 && frame.all { it.code in 32..126 })
         val parts = frame.split('|')
         require(parts.size == 6 && parts[0] == "1" && parts[1] == session && parts[2] == if (role == "android") "mac" else "android")
         val seq = parts[3].toLong()
-        require(seq > incoming)
+        require(seq > incoming && seq.toString() == parts[3])
         val body = parts.take(5).joinToString("|").toByteArray(StandardCharsets.UTF_8)
         require(MessageDigest.isEqual(hmac(body), Base64.getDecoder().decode(parts[5])))
         val packet = Packet.decode(Base64.getDecoder().decode(parts[4]))

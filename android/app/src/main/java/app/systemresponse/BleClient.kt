@@ -7,6 +7,8 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import android.os.SystemClock
+import android.os.Build
 import java.util.ArrayDeque
 import java.util.UUID
 
@@ -41,6 +43,7 @@ class BleClient(private val context: Context, private val secret: ByteArray,
     private val packets = PacketQueue()
     private var payloadSize = 20
     private var discovering = false
+    private var subscribed = false
     private var writeStarted = 0L
     private var writing = false
     private var scanning = false
@@ -62,7 +65,7 @@ class BleClient(private val context: Context, private val secret: ByteArray,
             if (g !== gatt) return@post
             if (code != BluetoothGatt.GATT_SUCCESS || state == BluetoothProfile.STATE_DISCONNECTED) { fail("BLE-связь с Mac прервана"); return@post }
             trace("GATT state=$state status=$code")
-            if (state == BluetoothProfile.STATE_CONNECTED) {
+            if (state == BluetoothProfile.STATE_CONNECTED) bluetoothOperation {
                 g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
                 if (!g.requestMtu(185)) discover(g)
                 else handler.postDelayed({ if (g === gatt) discover(g) }, 2000)
@@ -76,18 +79,29 @@ class BleClient(private val context: Context, private val secret: ByteArray,
         } }
         override fun onServicesDiscovered(g: BluetoothGatt, code: Int) { handler.post {
             if (g !== gatt) return@post
-            val service = g.getService(SERVICE)
-            write = service?.getCharacteristic(WRITE)
-            val notify = service?.getCharacteristic(NOTIFY)
-            val descriptor = notify?.getDescriptor(CCCD)
-            if (code != BluetoothGatt.GATT_SUCCESS) { fail("Не удалось прочитать BLE-сервис Mac"); return@post }
-            if (write == null || notify == null || descriptor == null) { fail("На Mac другой BLE-сервис", BleFailure.INCOMPATIBLE_SERVICE); return@post }
-            if (!g.setCharacteristicNotification(notify, true)) { fail("Не удалось включить ответы Mac"); return@post }
-            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-            if (!g.writeDescriptor(descriptor)) fail("Подписка BLE отклонена")
+            bluetoothOperation {
+                val service = g.getService(SERVICE)
+                write = service?.getCharacteristic(WRITE)
+                val notify = service?.getCharacteristic(NOTIFY)
+                val descriptor = notify?.getDescriptor(CCCD)
+                if (code != BluetoothGatt.GATT_SUCCESS) { fail("Не удалось прочитать BLE-сервис Mac"); return@post }
+                if (write == null || notify == null || descriptor == null) { fail("На Mac другой BLE-сервис", BleFailure.INCOMPATIBLE_SERVICE); return@post }
+                if (!g.setCharacteristicNotification(notify, true)) { fail("Не удалось включить ответы Mac"); return@post }
+                val accepted = if (Build.VERSION.SDK_INT >= 33) {
+                    g.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothStatusCodes.SUCCESS
+                } else {
+                    @Suppress("DEPRECATION")
+                    descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    @Suppress("DEPRECATION")
+                    g.writeDescriptor(descriptor)
+                }
+                if (!accepted) fail("Подписка BLE отклонена")
+            }
         } }
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, code: Int) { handler.post {
-            if (g === gatt && code != BluetoothGatt.GATT_SUCCESS) fail("Mac не разрешил подписку")
+            if (g !== gatt || descriptor.uuid != CCCD) return@post
+            if (code != BluetoothGatt.GATT_SUCCESS) fail("Mac не разрешил подписку")
+            else { subscribed = true; flush() }
         } }
         @Deprecated("Compatibility callback for API 31–32")
         override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
@@ -98,7 +112,7 @@ class BleClient(private val context: Context, private val secret: ByteArray,
             handler.post { if (g === gatt && characteristic.uuid == NOTIFY) receiveBytes(value) }
         }
         override fun onCharacteristicWrite(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, code: Int) { handler.post {
-            if (g !== gatt) return@post
+            if (g !== gatt || characteristic.uuid != WRITE || !writing) return@post
             if (code != BluetoothGatt.GATT_SUCCESS) { fail("Mac отклонил BLE-пакет"); return@post }
             if (writes.isNotEmpty()) writes.removeFirst()
             if (writes.isEmpty()) trace("TX frame complete elapsedMs=${android.os.SystemClock.elapsedRealtime() - writeStarted} queued=${packets.size}")
@@ -108,7 +122,12 @@ class BleClient(private val context: Context, private val secret: ByteArray,
     private fun discover(g: BluetoothGatt) {
         if (discovering) return
         discovering = true
-        if (!g.discoverServices()) fail("Не удалось прочитать BLE-сервис")
+        bluetoothOperation { if (!g.discoverServices()) fail("Не удалось прочитать BLE-сервис") }
+    }
+    private inline fun bluetoothOperation(block: () -> Unit) {
+        try { block() }
+        catch (_: SecurityException) { fail("Разреши доступ к Bluetooth на телефоне", BleFailure.PERMISSION) }
+        catch (_: RuntimeException) { fail("BLE-связь с Mac прервана") }
     }
     fun start() {
         stop()
@@ -125,16 +144,19 @@ class BleClient(private val context: Context, private val secret: ByteArray,
     }
     private fun stopScan() { if (scanning) { runCatching { adapter?.bluetoothLeScanner?.stopScan(scanner) }; scanning = false } }
     fun stop() {
-        generation++; stopScan(); trusted = false; wire = null; buffer = FrameBuffer(); writes.clear(); packets.clear(); payloadSize = 20; discovering = false; writing = false; write = null
-        val old = gatt; gatt = null; runCatching { old?.disconnect(); old?.close() }
+        generation++; handler.removeCallbacksAndMessages(null); stopScan(); trusted = false; wire = null; buffer = FrameBuffer(); writes.clear(); packets.clear(); payloadSize = 20; discovering = false; subscribed = false; writing = false; write = null
+        val old = gatt; gatt = null
+        runCatching { old?.disconnect() }; runCatching { old?.close() }
     }
     private fun fail(reason: String, failure: BleFailure = BleFailure.TRANSIENT) {
         trace("BLE failure=${failure.name} retryable=${failure.retryable}: $reason")
         stop(); status(reason, false); lost(failure)
     }
     private fun receiveBytes(value: ByteArray) {
+        val token = generation
         try {
             for (frame in buffer.append(value)) {
+                if (token != generation) return
                 if (frame.startsWith("HELLO|")) {
                     require(wire == null && !trusted)
                     val session = frame.substringAfter('|'); require(UUID.fromString(session).toString().equals(session, true))
@@ -143,9 +165,9 @@ class BleClient(private val context: Context, private val secret: ByteArray,
                     val packet = wire?.decode(frame) ?: error("No session")
                     trace("RX type=${packet.type} tx=${packet.id} bytes=${frame.length}")
                     if (!trusted) {
-                        require(packet.type == "hello"); trusted = true; status("Mac • доверенная связь", true); lastSeen = System.currentTimeMillis(); heartbeat(generation)
+                        require(packet.type == "hello"); trusted = true; status("Mac • доверенная связь", true); lastSeen = SystemClock.elapsedRealtime(); heartbeat(generation)
                     } else {
-                        lastSeen = System.currentTimeMillis()
+                        lastSeen = SystemClock.elapsedRealtime()
                         when (packet.type) { "ping" -> send(Packet("pong")); "pong" -> Unit; else -> received(packet) }
                     }
                 }
@@ -158,7 +180,9 @@ class BleClient(private val context: Context, private val secret: ByteArray,
         flush()
     }
     private fun flush() {
-        if (writing) return
+        // HELLO can arrive before Android receives the CCCD write callback. Keep the
+        // authentication reply queued until the descriptor operation has completed.
+        if (writing || !subscribed) return
         val characteristic = write ?: return
         if (writes.isEmpty()) {
             val packet = packets.next() ?: return
@@ -167,15 +191,24 @@ class BleClient(private val context: Context, private val secret: ByteArray,
             writeStarted = android.os.SystemClock.elapsedRealtime()
             trace("TX type=${packet.type} tx=${packet.id} bytes=${data.size} chunks=${writes.size} queued=${packets.size}")
         }
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        characteristic.value = writes.first
         writing = true
-        if (gatt?.writeCharacteristic(characteristic) != true) fail("Не удалось отправить BLE-команду")
+        bluetoothOperation {
+            val accepted = if (Build.VERSION.SDK_INT >= 33) {
+                gatt?.writeCharacteristic(characteristic, writes.first, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
+            } else {
+                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                @Suppress("DEPRECATION")
+                characteristic.value = writes.first
+                @Suppress("DEPRECATION")
+                gatt?.writeCharacteristic(characteristic) == true
+            }
+            if (!accepted) fail("Не удалось отправить BLE-команду")
+        }
     }
     private fun heartbeat(token: Int) {
         handler.postDelayed({
             if (generation != token || !trusted) return@postDelayed
-            if (System.currentTimeMillis() - lastSeen > 14_000) fail("Mac перестал отвечать. Текущий звук не меняем")
+            if (SystemClock.elapsedRealtime() - lastSeen > 14_000) fail("Mac перестал отвечать. Текущий звук не меняем")
             else { send(Packet("ping")); heartbeat(token) }
         }, 4_000)
     }

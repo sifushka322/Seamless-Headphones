@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 @main struct CoreTests {
     static func main() throws {
@@ -24,8 +25,28 @@ import Foundation
         rejects("old session") { _ = try SecureWire(secret: key, session: "NEW", role: "mac").decode(frames[0]) }
         rejects("reflection") { _ = try sender.decode(frames[0]) }
         rejects("tamper") { _ = try SecureWire(secret: key, session: session, role: "mac").decode(frames[0].replacingOccurrences(of: "|1|", with: "|2|")) }
+        func signed(sequence: String, payload: Data) -> String {
+            let body = "1|\(session)|android|\(sequence)|\(payload.base64EncodedString())"
+            let signature = Data(HMAC<SHA256>.authenticationCode(for: Data(body.utf8), using: SymmetricKey(data: key))).base64EncodedString()
+            return "\(body)|\(signature)"
+        }
+        let validPayload = try JSONEncoder().encode(packet)
+        for sequence in ["+2", "02", " 2", "18446744073709551616"] {
+            rejects("noncanonical or overflowing sequence \(sequence)") {
+                _ = try receiver.decode(signed(sequence: sequence, payload: validPayload))
+            }
+        }
+        rejects("signed packet rejects non-string fields") {
+            _ = try receiver.decode(signed(sequence: "2", payload: Data(#"{"type":1,"id":"","target":"","detail":"","device":""}"#.utf8)))
+        }
+        let afterInvalid = try receiver.decode(signed(sequence: "2", payload: validPayload))
+        check(afterInvalid == packet, "invalid authenticated payload does not consume the sequence")
         rejects("frame overflow") { var b = FrameBuffer(); _ = try b.append(Data(repeating: 65, count: 4097)) }
         var multi = FrameBuffer(); let all = try multi.append(encoded + encoded); check(all.count == 2, "coalesced frames")
+        var invalidUTF8 = FrameBuffer()
+        rejects("invalid UTF-8 frame") { _ = try invalidUTF8.append(Data([0xff, 10])) }
+        let recovered = try invalidUTF8.append(encoded)
+        check(recovered.count == 1 && recovered[0] == frames[0], "invalid frame bytes do not contaminate a new frame")
         var tx = Transfer(target: "android", now: Date(timeIntervalSince1970: 100), id: "tx")
         check(!tx.accept(Packet(type: "released", id: "tx")), "release before readiness rejected")
         check(!tx.accept(Packet(type: "ready", id: "old")), "stale transaction rejected")

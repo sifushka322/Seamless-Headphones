@@ -50,11 +50,11 @@ enum AudioDevices {
         guard let id = number(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice) else { return "Неизвестно" }
         return string(id, kAudioObjectPropertyName) ?? "Неизвестно"
     }
-    static var microphoneActive: Bool {
+    static var microphoneActive: Bool? {
         let processes = MediaMonitor.observe()
-        if processes.available { return processes.microphone }
-        guard let id = number(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice) else { return false }
-        return number(id, kAudioDevicePropertyDeviceIsRunningSomewhere) == 1
+        if processes.microphone { return true }
+        // The default input cannot rule out a call using a different microphone.
+        return processes.microphoneKnown ? false : nil
     }
     static func select(_ id: AudioDeviceID) -> Bool {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
@@ -90,7 +90,8 @@ final class Headphones {
     func preflight(address: String) -> String? {
         guard !address.isEmpty, let device = IOBluetoothDevice(addressString: address), device.isPaired() else { return "Выбери сопряжённые наушники" }
         guard IOBluetoothHostController.default()?.powerState == kBluetoothHCIPowerStateON else { return "Включи Bluetooth на Mac" }
-        if AudioDevices.microphoneActive { return "Микрофон Mac используется. Заверши разговор перед передачей" }
+        guard let microphone = AudioDevices.microphoneActive else { return "Не удалось проверить микрофон Mac. Дождись обновления состояния и повтори." }
+        if microphone { return "Микрофон Mac используется. Заверши разговор перед передачей" }
         return nil
     }
     func diagnostics(address: String) -> String { "basebandConnected=\(IOBluetoothDevice(addressString: address)?.isConnected() ?? false) defaultOutput=\(AudioDevices.currentName)" }
@@ -106,12 +107,21 @@ final class Headphones {
                 DispatchQueue.main.async { if self.current(token) { completion(false, "Наушники не найдены") } }; return
             }
             let status = device.isConnected() ? device.closeConnection() : kIOReturnSuccess
-            let released = status == kIOReturnSuccess && !device.isConnected()
             self.unreserve()
             DispatchQueue.main.async {
                 guard self.current(token) else { return }
-                completion(released, released ? "Mac освободил наушники" : "macOS не отключила наушники")
+                if status != kIOReturnSuccess { completion(false, "macOS не отключила наушники"); return }
+                self.waitForRelease(address: address, token: token, remaining: 50, completion: completion)
             }
+        }
+    }
+    private func waitForRelease(address: String, token: UUID, remaining: Int, completion: @escaping (Bool, String) -> Void) {
+        guard current(token) else { return }
+        guard let device = IOBluetoothDevice(addressString: address) else { completion(false, "Наушники не найдены"); return }
+        if !device.isConnected() { completion(true, "Mac освободил наушники"); return }
+        guard remaining > 0 else { completion(false, "macOS не отключила наушники"); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.waitForRelease(address: address, token: token, remaining: remaining - 1, completion: completion)
         }
     }
     func acquire(address: String, completion: @escaping (Bool, String, Bool) -> Void) {
@@ -139,7 +149,10 @@ final class Headphones {
     }
     private func waitForOutput(address: String, token: UUID, remaining: Int, start: Double, completion: @escaping (Bool, String, Bool) -> Void) {
         guard current(token) else { return }
-        if AudioDevices.microphoneActive { completion(false, "Микрофон начал использоваться. Выбор аудиовыхода остановлен", false); return }
+        guard let microphone = AudioDevices.microphoneActive else {
+            completion(false, "Не удалось проверить микрофон Mac. Дождись обновления состояния и повтори.", false); return
+        }
+        if microphone { completion(false, "Микрофон начал использоваться. Выбор аудиовыхода остановлен", false); return }
         if let id = AudioDevices.output(for: address), AudioDevices.select(id) {
             onTrace("ADAPTER mac route verified elapsed=\(ProcessInfo.processInfo.systemUptime - start)")
             completion(true, "Наушники выбраны системным выходом Mac", false); return

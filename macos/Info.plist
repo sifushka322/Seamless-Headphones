@@ -6,10 +6,10 @@
 <key>CFBundleName</key><string>Seamless Headphones</string>
 <key>CFBundleDisplayName</key><string>Seamless Headphones</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
-<key>CFBundleShortVersionString</key><string>0.5.0</string>
-<key>CFBundleVersion</key><string>7</string>
+<key>CFBundleShortVersionString</key><string>0.5.1</string>
+<key>CFBundleVersion</key><string>8</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>LSMinimumSystemVersion</key><string>14.2</string>
 <key>NSBluetoothAlwaysUsageDescription</key><string>Связь с твоим Android по Bluetooth для передачи наушников между устройствами.</string>
 <key>NSBluetoothPeripheralUsageDescription</key><string>Передача команд твоему Android по BLE без интернета.</string>
 <key>NSHighResolutionCapable</key><true/>

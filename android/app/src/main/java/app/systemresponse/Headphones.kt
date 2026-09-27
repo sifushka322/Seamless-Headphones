@@ -1,11 +1,13 @@
 package app.systemresponse
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.bluetooth.*
 import android.content.Context
 import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.media.*
 import android.os.Handler
@@ -25,6 +27,8 @@ class Headphones(private val context: Context, private val trace: (String) -> Un
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private var profile: BluetoothA2dp? = null
+    private var profileProxy: BluetoothProfile? = null
+    private var profileRequested = false
     private var operation = 0
     private var track: AudioTrack? = null
     private var closed = false
@@ -37,8 +41,10 @@ class Headphones(private val context: Context, private val trace: (String) -> Un
     fun diagnostics(address: String): String = "profileConnected=${connected(address)} pending=${unsettled != null} lastProbeAddress=$lastRouteAddress lastProbeAgeMs=${if (lastRouteAt > 0) SystemClock.elapsedRealtime() - lastRouteAt else -1}; probe is historical, not the player's current audible output"
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            if (!bluetoothGranted() || closed) return
             @Suppress("DEPRECATION") val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
-            if (normalize(device.address) != normalize(unsettled?.address ?: "")) return
+            val matches = runCatching { normalize(device.address) == normalize(unsettled?.address ?: "") }.getOrDefault(false)
+            if (!matches) return
             // An old broadcast can arrive during a new attempt for the same address.
             // Re-read current profile state before releasing the in-flight guard.
             val state = runCatching { profile?.getConnectionState(device) }.getOrNull() ?: return
@@ -49,15 +55,36 @@ class Headphones(private val context: Context, private val trace: (String) -> Un
     }
     init {
         androidx.core.content.ContextCompat.registerReceiver(context, receiver, IntentFilter(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED), androidx.core.content.ContextCompat.RECEIVER_EXPORTED)
-        adapter?.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
-        override fun onServiceConnected(id: Int, proxy: BluetoothProfile) { main.post {
-            if (closed) adapter.closeProfileProxy(id, proxy) else profile = proxy as? BluetoothA2dp
-        } }
-        override fun onServiceDisconnected(id: Int) { main.post { profile = null } }
-    }, BluetoothProfile.A2DP) }
-    fun paired(): List<BluetoothDevice> = adapter?.bondedDevices?.filter { it.bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.AUDIO_VIDEO }?.distinctBy { normalize(it.address) }?.sortedBy { it.name ?: it.address } ?: emptyList()
+        ensureProfile()
+    }
+    private fun bluetoothGranted() = context.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+    private fun ensureProfile() {
+        if (closed || profileRequested || profile != null || !bluetoothGranted()) return
+        profileRequested = runCatching {
+            adapter?.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(id: Int, proxy: BluetoothProfile) { main.post {
+                    if (closed) runCatching { adapter?.closeProfileProxy(id, proxy) }
+                    else { profileProxy = proxy; profile = proxy as? BluetoothA2dp }
+                } }
+                // The existing proxy binding reconnects with the Bluetooth service. Opening
+                // another on every sample would leak listeners while Bluetooth is disabled.
+                override fun onServiceDisconnected(id: Int) { main.post { profile = null } }
+            }, BluetoothProfile.A2DP) == true
+        }.getOrDefault(false)
+    }
+    fun paired(): List<BluetoothDevice> {
+        ensureProfile()
+        return runCatching { adapter?.bondedDevices?.filter { it.bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.AUDIO_VIDEO }?.distinctBy { normalize(it.address) }?.sortedBy { it.name ?: it.address } ?: emptyList() }.getOrDefault(emptyList())
+    }
     fun connected(address: String): Boolean = runCatching { profile?.connectedDevices?.any { normalize(it.address) == normalize(address) } == true }.getOrDefault(false)
     fun preflight(address: String, acquiring: Boolean): String? {
+        if (!bluetoothGranted()) return "Разреши доступ к Bluetooth на телефоне"
+        ensureProfile()
+        return try { preflightWithPermission(address, acquiring) }
+        catch (_: SecurityException) { "Разреши доступ к Bluetooth на телефоне" }
+        catch (_: RuntimeException) { "Аудиопрофиль недоступен" }
+    }
+    private fun preflightWithPermission(address: String, acquiring: Boolean): String? {
         if (adapter?.isEnabled != true) return "Включи Bluetooth на телефоне"
         if (paired().none { normalize(it.address) == normalize(address) }) return "Выбери сопряжённые наушники на телефоне"
         val calls = CallGuard.read(context)
@@ -66,12 +93,22 @@ class Headphones(private val context: Context, private val trace: (String) -> Un
         return try {
             if (p.connectedDevices.any { normalize(it.address) == normalize(address) } == acquiring) null
             else { p.javaClass.getMethod(if (acquiring) "connect" else "disconnect", BluetoothDevice::class.java); null }
-        } catch (_: Exception) { "Эта версия Android запрещает управление A2DP. Подключи наушники в системных настройках" }
+        } catch (_: SecurityException) { "Разреши доступ к Bluetooth на телефоне" }
+        catch (_: Exception) { "Эта версия Android запрещает управление A2DP. Подключи наушники в системных настройках" }
     }
     fun cancel() { operation++; stopProbe() }
-    fun close() { context.unregisterReceiver(receiver); closed = true; cancel(); profile?.let { adapter?.closeProfileProxy(BluetoothProfile.A2DP, it) }; profile = null; worker.shutdownNow() }
-    private fun stopProbe() { runCatching { track?.stop() }; track?.release(); track = null }
+    fun close() {
+        if (closed) return
+        // Keep a queued profile callback alive so it can close a proxy that arrives late.
+        // Poll/probe callbacks already stop on closed or the operation token.
+        closed = true; cancel()
+        runCatching { context.unregisterReceiver(receiver) }
+        profileProxy?.let { runCatching { adapter?.closeProfileProxy(BluetoothProfile.A2DP, it) } }
+        profile = null; profileProxy = null; worker.shutdownNow()
+    }
+    private fun stopProbe() { val old = track; track = null; runCatching { old?.stop() }; runCatching { old?.release() } }
     fun change(address: String, connect: Boolean, completion: (Boolean, String, Boolean) -> Unit) {
+        if (closed) { completion(false, "Аудиопрофиль недоступен", false); return }
         if (unsettled != null) { completion(false, "Предыдущая операция A2DP ещё завершается. Дождись состояния Bluetooth", false); return }
         cancel(); val token = operation
         adapterStarted = SystemClock.elapsedRealtime()
@@ -79,7 +116,10 @@ class Headphones(private val context: Context, private val trace: (String) -> Un
         preflight(address, connect)?.let { completion(false, it, false); return }
         val p = profile ?: return completion(false, "Аудиопрофиль недоступен", false)
         val device = paired().firstOrNull { normalize(it.address) == normalize(address) } ?: return completion(false, "Устройство не сопряжено", false)
-        if (p.getConnectionState(device) == (if (connect) BluetoothProfile.STATE_CONNECTED else BluetoothProfile.STATE_DISCONNECTED)) {
+        val currentState = try { p.getConnectionState(device) }
+        catch (_: SecurityException) { completion(false, "Разреши доступ к Bluetooth на телефоне", false); return }
+        catch (_: RuntimeException) { completion(false, "Аудиопрофиль недоступен", false); return }
+        if (currentState == (if (connect) BluetoothProfile.STATE_CONNECTED else BluetoothProfile.STATE_DISCONNECTED)) {
             if (connect) probe(address, token, completion) else completion(true, "Телефон освободил A2DP", false)
             return
         }
@@ -101,6 +141,7 @@ class Headphones(private val context: Context, private val trace: (String) -> Un
     }
     private fun poll(device: BluetoothDevice, connect: Boolean, token: Int, remaining: Int, completion: (Boolean, String, Boolean) -> Unit) {
         if (token != operation || closed) return
+        if (!bluetoothGranted()) { completion(false, "Разреши доступ к Bluetooth на телефоне", false); return }
         val connected = runCatching { profile?.getConnectionState(device) }.getOrNull()
         if (connected == BluetoothProfile.STATE_CONNECTING || connected == BluetoothProfile.STATE_DISCONNECTING) sawTransition = true
         if (connect && connected == BluetoothProfile.STATE_DISCONNECTED && sawTransition) {
@@ -130,7 +171,7 @@ class Headphones(private val context: Context, private val trace: (String) -> Un
     private fun checkRoute(address: String, token: Int, probe: AudioTrack, remaining: Int, completion: (Boolean, String, Boolean) -> Unit) {
         if (token != operation || closed) return
         if (CallGuard.read(context).busy) { stopProbe(); completion(false, "Начался разговор. Проверка маршрута остановлена", false); return }
-        val routed = probe.routedDevice
+        val routed = runCatching { probe.routedDevice }.getOrNull()
         val verified = routed?.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP && normalize(routed.address) == normalize(address)
         if (!verified && remaining > 0) {
             main.postDelayed({ checkRoute(address, token, probe, remaining - 1, completion) }, 100)

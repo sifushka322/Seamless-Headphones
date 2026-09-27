@@ -70,6 +70,6 @@ class MediaMonitor(private val context: Context, private val changed: () -> Unit
         observe(sessions)
         MediaObservation(true, sessions.filter { it.playbackState?.state == PlaybackState.STATE_PLAYING }.map { it.packageName }.toSet(), sessions.map { it.packageName }.toSet())
     } catch (_: SecurityException) { close(); MediaObservation(false, emptySet(), emptySet()) }
-    catch (_: RuntimeException) { MediaObservation(false, emptySet(), emptySet()) }
+    catch (_: RuntimeException) { close(); MediaObservation(false, emptySet(), emptySet()) }
     fun name(pkg: String): String = known[pkg] ?: runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
 }

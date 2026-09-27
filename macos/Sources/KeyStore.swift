@@ -2,6 +2,10 @@ import Foundation
 import Security
 
 enum KeyStore {
+    private enum Failure: LocalizedError {
+        case invalidSecret
+        var errorDescription: String? { "Ключ доверия в Keychain повреждён. Сбрось доверие и свяжи телефон заново." }
+    }
     static let service = "app.systemresponse.pairing"
     static func secret() throws -> Data {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
@@ -9,7 +13,10 @@ enum KeyStore {
             kSecReturnData as String: true]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecSuccess, let data = result as? Data, data.count == 32 { return data }
+        if status == errSecSuccess {
+            guard let data = result as? Data, data.count == 32 else { throw Failure.invalidSecret }
+            return data
+        }
         guard status == errSecItemNotFound else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
         return try replace()
     }

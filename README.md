@@ -2,7 +2,7 @@
 
 Move your headphones between **Mac and Android**. Native Swift/SwiftUI and Kotlin apps coordinate over authenticated BLE, without accounts, a server, or a shared Wi-Fi network. Windows is not supported.
 
-**0.5.0 - Stable Production Release.** The stable release channel uses parallel handoff, confirmed automation controls, clearer connection states, and Russian/English interfaces. Update both apps. See [release validation](docs/validation-0.5.md) for checks and limitations.
+**0.5.1 — Reliability and usability update.** The stable release channel uses parallel handoff, confirmed automation controls, clearer connection states, and Russian/English interfaces. Update both apps. See [audit and validation](docs/audit-0.5.1.md) for fixes, checks and limitations.
 
 The release designation describes the selected software channel. The locally generated installers still use ad hoc signing on Mac and the existing Android debug certificate to preserve upgrade compatibility. They are not notarized or store-distributed production installers.
 
@@ -19,7 +19,7 @@ The release designation describes the selected software channel. The locally gen
 
 ## Setup
 
-1. **Mac:** macOS 14 or newer. The current DMG targets Apple Silicon. Move `Seamless Headphones.app` to Applications. The local build is ad hoc signed and not notarized.
+1. **Mac:** macOS 14.2 or newer. The current DMG targets Apple Silicon. Move `Seamless Headphones.app` to Applications. The local build is ad hoc signed and not notarized.
 2. **Android:** Android 12 or newer (API 31). Install the APK over the previous version to preserve settings and pairing.
 3. Pair the headphones with both operating systems. Select the same Bluetooth address in both apps under Devices; matching names alone are insufficient.
 4. Enable the link on Mac and show its QR code. On Android, scan the QR under Devices, confirm the key, and find the Mac. Manual key entry is also available. Grant Nearby Devices/Bluetooth and notification permissions; the camera is only used for QR scanning.
@@ -60,7 +60,7 @@ bash scripts/test-macos.sh
 bash scripts/build-macos.sh --dmg
 ```
 
-`MACOS_SDK` overrides the SDK path. The deployment target is macOS 14.0; the build architecture follows the host. Missing process-observation APIs disable automation at runtime.
+`MACOS_SDK` overrides the SDK path. The deployment target is macOS 14.2; the build architecture follows the host. Missing process-observation APIs or an unknown microphone state block transfers at runtime to protect calls.
 
 Android uses JDK 17, SDK 35, Build Tools 35.0.0, Gradle 8.11.1, AGP 8.9.1, and Kotlin 2.1.20:
 
@@ -82,4 +82,4 @@ cd android
 | `localization` | Shared translations of user-facing state and errors |
 | `protocol/vectors.json` | Shared protocol vectors with synthetic keys |
 | [Protocol](docs/protocol.md) | Authentication, messages, transactions, stale-event protection |
-| [Release validation](docs/validation-0.5.md) | Audit findings, verification, hardware limitations |
+| [Audit and validation](docs/audit-0.5.1.md) | Current fixes, verification, hardware limitations |

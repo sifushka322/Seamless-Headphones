@@ -9,6 +9,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.click
 import androidx.test.espresso.action.ViewActions.scrollTo
+import androidx.test.espresso.action.ViewActions.replaceText
+import androidx.test.espresso.action.ViewActions.closeSoftKeyboard
 import androidx.test.espresso.Espresso.pressBack
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.*
@@ -151,12 +153,14 @@ class InterfaceTest {
     }
     @Test fun englishCoversAllPagesDialogsScannerAndPersists() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        // This dialog is only actionable when a pairing key exists.
+        SecretStore(instrumentation.targetContext).save(java.util.Base64.getEncoder().encodeToString(ByteArray(32) { 7 }))
         listOf("CAMERA", "BLUETOOTH_CONNECT", "BLUETOOTH_SCAN").forEach { permission ->
             android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand("pm grant ${instrumentation.targetContext.packageName} android.permission.$permission")).use { it.readBytes() }
         }
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             onView(withContentDescription("Настройки")).perform(click())
-            onView(withContentDescription("language-en")).perform(scrollTo(), click())
+            onView(withTagValue(org.hamcrest.Matchers.`is`("language-en"))).perform(scrollTo(), click())
             onView(withText("✓  English")).perform(scrollTo()).check(matches(isDisplayed()))
             scenario.recreate()
             onView(withText("✓  English")).perform(scrollTo()).check(matches(isDisplayed()))
@@ -178,14 +182,60 @@ class InterfaceTest {
             onView(withText("Point the camera at the QR code in Seamless on your Mac")).check(matches(isDisplayed()))
             onView(withText("Close scanner")).perform(click())
             onView(withContentDescription("Settings")).perform(click())
-            onView(withContentDescription("language-system")).perform(scrollTo(), click())
+            onView(withTagValue(org.hamcrest.Matchers.`is`("language-system"))).perform(scrollTo(), click())
             scenario.onActivity { activity ->
                 org.junit.Assert.assertEquals(android.content.res.Resources.getSystem().configuration.locales[0].language != "ru", L.english(activity))
             }
-            onView(withContentDescription("language-ru")).perform(scrollTo(), click())
+            onView(withTagValue(org.hamcrest.Matchers.`is`("language-ru"))).perform(scrollTo(), click())
             onView(withText("✓  Русский")).perform(scrollTo()).check(matches(isDisplayed()))
             onView(withContentDescription("Обзор")).perform(click())
             onView(withText("Начнём с подключения")).check(matches(isDisplayed()))
+        }
+        SecretStore(instrumentation.targetContext).clear()
+    }
+    @Test fun pairingDraftSurvivesNavigationAndRotationAndInvalidKeyExplainsTheProblem() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        SecretStore(ctx).clear()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            onView(withContentDescription("Устройства")).perform(click())
+            onView(withText("Ключ Mac ещё не добавлен")).perform(scrollTo()).check(matches(isDisplayed()))
+            onView(withText("Забыть Mac")).perform(scrollTo()).check(matches(org.hamcrest.Matchers.not(isEnabled())))
+            onView(withHint("Ключ связи с Mac")).perform(scrollTo(), replaceText("invalid-key"), closeSoftKeyboard())
+            onView(withText("Сохранить ключ")).perform(scrollTo(), click())
+            onView(withHint("Ключ связи с Mac")).check(matches(hasErrorText("Проверь 44 символа ключа Base64 с Mac")))
+            onView(withContentDescription("Настройки")).perform(click())
+            onView(withContentDescription("Устройства")).perform(click())
+            onView(withHint("Ключ связи с Mac")).perform(scrollTo()).check(matches(withText("invalid-key")))
+            scenario.recreate()
+            onView(withHint("Ключ связи с Mac")).perform(scrollTo()).check(matches(withText("invalid-key")))
+            org.junit.Assert.assertNull(SecretStore(ctx).load())
+        }
+    }
+    @Test fun savingKeyShowsPersistentConfirmationAndClearsTheSensitiveField() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val testKey = java.util.Base64.getEncoder().encodeToString(ByteArray(32) { 9 })
+        SecretStore(ctx).clear()
+        try {
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                onView(withContentDescription("Устройства")).perform(click())
+                onView(withHint("Ключ связи с Mac")).perform(scrollTo(), replaceText(testKey), closeSoftKeyboard())
+                onView(withText("Сохранить ключ")).perform(scrollTo(), click())
+                onView(withHint("Ключ связи с Mac")).check(matches(withText("")))
+                onView(withText("✓  Ключ Mac сохранён")).perform(scrollTo()).check(matches(isDisplayed()))
+                scenario.recreate()
+                onView(withText("✓  Ключ Mac сохранён")).perform(scrollTo()).check(matches(isDisplayed()))
+                onView(withText("Забыть Mac")).perform(scrollTo()).check(matches(isEnabled()))
+                org.junit.Assert.assertArrayEquals(ByteArray(32) { 9 }, SecretStore(ctx).load())
+                org.junit.Assert.assertNotEquals(testKey, ctx.getSharedPreferences("trust", Context.MODE_PRIVATE).getString("secret", null))
+            }
+        } finally { SecretStore(ctx).clear() }
+    }
+    @Test fun settingsScrollPositionSurvivesRecreation() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            onView(withContentDescription("Настройки")).perform(click())
+            onView(withText("История Android")).perform(scrollTo())
+            scenario.recreate()
+            onView(withText("История Android")).check(matches(isDisplayed()))
         }
     }
     @Test fun englishDynamicMessagesKeepNamesAndTranslateHistory() {

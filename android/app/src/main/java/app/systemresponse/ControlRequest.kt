@@ -9,8 +9,14 @@ class ControlRequest {
         if (this.id != null) return false
         this.id = id; this.kind = kind; sentAt = now; return true
     }
-    fun accept(id: String, kind: String): Boolean {
+    fun accept(id: String, kind: String, outcome: String): Boolean {
         if (this.id == null || this.id != id || this.kind != kind) return false
+        val outcomes = when (kind) {
+            "mode" -> setOf("idle", "follow", "rejected")
+            "resume" -> setOf("accepted", "rejected")
+            else -> return false
+        }
+        if (outcome !in outcomes) return false
         clear(); return true
     }
     fun expire(now: Long): Boolean {

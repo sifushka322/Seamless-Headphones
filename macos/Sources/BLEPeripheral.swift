@@ -11,6 +11,7 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
     private var packets = PacketQueue()
     var onDisconnect: () -> Void = {}
     private var manager: CBPeripheralManager!
+    private var publishedService: CBMutableService?
     private var notifyCharacteristic: CBMutableCharacteristic!
     private var central: CBCentral?
     private var wire: SecureWire?
@@ -26,6 +27,7 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
         else if manager.state == .poweredOn { publish() }
     }
     func stop() {
+        publishedService = nil
         manager?.stopAdvertising(); manager?.removeAllServices(); reset()
         secret = nil; onStatus("Связь выключена", false)
     }
@@ -44,10 +46,11 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
         let service = CBMutableService(type: Self.serviceID, primary: true)
         let write = CBMutableCharacteristic(type: Self.writeID, properties: .write, value: nil, permissions: .writeable)
         notifyCharacteristic = CBMutableCharacteristic(type: Self.notifyID, properties: .notify, value: nil, permissions: [])
-        service.characteristics = [write, notifyCharacteristic]; manager.add(service)
+        service.characteristics = [write, notifyCharacteristic]; publishedService = service; manager.add(service)
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
-        guard error == nil, secret != nil else { onStatus("Не удалось создать BLE-сервис", false); return }
+        guard service === publishedService, secret != nil else { return }
+        guard error == nil else { onStatus("Не удалось создать BLE-сервис", false); return }
         peripheral.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [Self.serviceID], CBAdvertisementDataLocalNameKey: "Seamless Headphones"])
         onStatus("Ожидаем телефон рядом", false)
     }
@@ -55,7 +58,7 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
         if let error { onStatus("BLE: \(error.localizedDescription)", false) }
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
-        guard self.central == nil, let secret else { return }
+        guard characteristic === notifyCharacteristic, self.central == nil, let secret else { return }
         onTrace("BLE subscribed payload=\(central.maximumUpdateValueLength)")
         self.central = central; authenticated = false; packets.reset(); buffer = FrameBuffer(); pending.removeAll()
         let session = UUID().uuidString
@@ -68,7 +71,7 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
         }
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
-        if self.central?.identifier == central.identifier { reset(); onStatus("Телефон отключён", false) }
+        if characteristic === notifyCharacteristic, self.central?.identifier == central.identifier { reset(); onStatus("Телефон отключён", false) }
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         // CoreBluetooth requires exactly one response for the entire atomic batch.
@@ -83,7 +86,11 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
                 peripheral.respond(to: request, withResult: .writeNotPermitted); continue
             }
             do {
+                let token = generation
                 for frame in try buffer.append(value) {
+                    // A callback may stop or restart the link. Do not deliver remaining
+                    // frames from the old write to a replacement session.
+                    guard token == generation else { break }
                     guard let wire else { throw WireError.invalid }
                     let packet = try wire.decode(frame)
                     onTrace("RX type=\(packet.type) tx=\(packet.id) bytes=\(frame.utf8.count)")
@@ -96,7 +103,10 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
             } catch {
                 peripheral.respond(to: request, withResult: .unlikelyError)
                 onTrace("BLE decode/write rejected: \(error)")
-                onStatus("Ошибка проверки BLE-пакета", authenticated)
+                // Framing or authentication has failed: discard both trust and all
+                // partially queued commands before accepting another handshake.
+                publish()
+                onStatus("Ошибка проверки BLE-пакета", false)
             }
         }
     }

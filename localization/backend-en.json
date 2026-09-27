@@ -272,5 +272,9 @@
   "Mac: {0} [{1}]": "Mac: {0} [{1}]",
   "Android: {0} [{1}]": "Android: {0} [{1}]",
   "Mac: {0} [{1}]\nAndroid: {2} [{3}]": "Mac: {0} [{1}]\nAndroid: {2} [{3}]",
-  "Android: {0} [{1}]\nMac: {2} [{3}]": "Android: {0} [{1}]\nMac: {2} [{3}]"
+  "Android: {0} [{1}]\nMac: {2} [{3}]": "Android: {0} [{1}]\nMac: {2} [{3}]",
+  "Неизвестный тип передачи": "Unknown transfer type",
+  "Ключ доверия в Keychain повреждён. Сбрось доверие и свяжи телефон заново.": "The pairing key in Keychain is damaged. Revoke access and pair your phone again.",
+  "Не удалось проверить микрофон Mac. Дождись обновления состояния и повтори.": "Unable to check the Mac microphone. Wait for the status to update and try again.",
+  "Не удалось запустить фоновую связь. Открой приложение и повтори подключение.": "Could not start the background connection. Open the app and try connecting again."
 }

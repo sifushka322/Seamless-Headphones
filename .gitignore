@@ -4,6 +4,7 @@
 dist/
 downloads/
 android/.gradle/
+android/.kotlin/
 android/local.properties
 **/build/
 *.keystore

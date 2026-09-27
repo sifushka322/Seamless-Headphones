@@ -18,5 +18,14 @@ class HandoffCommands(private val target: String) {
             stage = "retryable"; "retryable"
         } else { stage = "failed"; "error" }
     }
-    fun canComplete(): Boolean = stage == "awaiting-completion" || (target == "mac" && stage == "prepared")
+    fun canComplete(destination: String = target): Boolean = destination == target &&
+        (stage == "awaiting-completion" || (target == "mac" && stage == "prepared"))
+}
+
+/** Re-read local observations before every automatic physical action, not only at prepare. */
+object HandoffSafety {
+    fun automaticAllowed(enabled: Boolean, held: Boolean, mediaAvailable: Boolean, callKnown: Boolean,
+        callBusy: Boolean, hasAllowedPlayback: Boolean, acquiring: Boolean, peer: ActivityState, peerAgeMillis: Long?): Boolean =
+        enabled && !held && mediaAvailable && callKnown && !callBusy && (!acquiring || hasAllowedPlayback) &&
+            peer.available && peer.automation && !peer.call && !peer.held && peerAgeMillis != null && peerAgeMillis in 0..6999
 }

@@ -31,6 +31,30 @@ class HandoffTest {
         assertTrue(gate.accept("tryAcquire")); assertEquals("earlyResult", gate.result("tryAcquire", true, false))
         assertTrue(gate.canComplete()); assertFalse(gate.accept("acquire")); assertFalse(gate.accept("release"))
     }
+    @Test fun completionCannotClaimAnotherDestination() {
+        val gate = HandoffCommands("android")
+        assertTrue(gate.accept("acquire"))
+        gate.result("acquire", true, false)
+        assertFalse(gate.canComplete("mac")); assertFalse(gate.canComplete("unknown"))
+        assertTrue(gate.canComplete("android"))
+        assertFalse(HandoffCommands("mac").canComplete("android"))
+    }
+    @Test fun automaticActionRechecksPermissionsAllowedPlaybackAndPeerState() {
+        val peer = ActivityState(available = true, automation = true)
+        fun allowed(media: Boolean = true, known: Boolean = true, busy: Boolean = false,
+            playing: Boolean = true, acquiring: Boolean = true, snapshot: ActivityState = peer,
+            age: Long? = 0) = HandoffSafety.automaticAllowed(true, false, media, known, busy, playing, acquiring, snapshot, age)
+        assertTrue(allowed())
+        assertFalse(allowed(media = false)); assertFalse(allowed(known = false)); assertFalse(allowed(busy = true))
+        // An unselected app continuing to play cannot authorize acquisition.
+        assertFalse(allowed(playing = false)); assertTrue(allowed(playing = false, acquiring = false))
+        assertFalse(allowed(snapshot = peer.copy(available = false)))
+        assertFalse(allowed(snapshot = peer.copy(automation = false)))
+        assertFalse(allowed(snapshot = peer.copy(call = true)))
+        assertFalse(allowed(snapshot = peer.copy(held = true)))
+        assertFalse(allowed(age = null)); assertFalse(allowed(age = -1)); assertFalse(allowed(age = 7000))
+        assertTrue(allowed(age = 6999))
+    }
     @Test fun callbackDebounceDeadlineAndCapabilityRoundTrip() {
         val edges = MediaEdges()
         edges.sample(emptySet(), 0, 500, false); edges.sample(setOf("music"), 100, 500, false)
