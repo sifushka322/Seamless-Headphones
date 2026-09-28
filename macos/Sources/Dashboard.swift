@@ -4,7 +4,7 @@ import AppKit
 enum Page: String, CaseIterable {
     case overview = "Обзор", automation = "Автоматизация", devices = "Устройства", settings = "Настройки"
     var symbol: String { switch self { case .overview: return "square.grid.2x2"; case .automation: return "sparkles"; case .devices: return "hifispeaker.and.homepod"; case .settings: return "slider.horizontal.3" } }
-    var subtitle: String { switch self { case .overview: return "Музыка продолжается. Устройства меняются."; case .automation: return "Твои правила. Без неожиданных переключений."; case .devices: return "Одна пара наушников. Два устройства."; case .settings: return "Сделай Seamless своим." } }
+    var subtitle: String { switch self { case .overview: return "Музыка продолжается. Устройства меняются."; case .automation: return "Твои правила. Без неожиданных переключений."; case .devices: return "Одна пара наушников. Два устройства."; case .settings: return "Сделай Sound Shift своим." } }
 }
 
 struct Dashboard: View {
@@ -59,7 +59,7 @@ struct Dashboard: View {
                             .background(warning.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                     }
                     switch page { case .overview: overview(compact: compact); case .automation: automation; case .devices: devices(compact: compact); case .settings: settings(compact: compact) }
-                    HStack { LT("SEAMLESS HEADPHONES").tracking(1.7); Spacer(); LT(model.demo ? "ДЕМО · БЕЗ КОМАНД УСТРОЙСТВАМ" : "0.5.1 · STABLE · ЛОКАЛЬНО ПО BLUETOOTH") }
+                    HStack { LT("SOUND SHIFT").tracking(1.7); Spacer(); LT(model.demo ? "ДЕМО · БЕЗ КОМАНД УСТРОЙСТВАМ" : "0.6.0 · STABLE · ЛОКАЛЬНО ПО BLUETOOTH") }
                         .font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(.tertiary).padding(.top, 6)
                 }.padding(compact ? 20 : 32).frame(maxWidth: 1100)
             }
@@ -84,7 +84,7 @@ struct Dashboard: View {
         VStack(alignment: .leading, spacing: 28) {
             HStack(spacing: 10) {
                 Image(systemName: "airpods.pro").font(.system(size: 21, weight: .semibold)).foregroundStyle(accent).frame(width: 42, height: 42).background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 13))
-                VStack(alignment: .leading, spacing: 1) { LT("Seamless").font(.system(size: 20, weight: .bold, design: .rounded)); LT("HEADPHONES").font(.system(size: 9, weight: .semibold)).tracking(2.3).foregroundStyle(secondary) }
+                VStack(alignment: .leading, spacing: 1) { LT("Sound Shift").font(.system(size: 20, weight: .bold, design: .rounded)); LT("BLUETOOTH AUDIO").font(.system(size: 9, weight: .semibold)).tracking(2.3).foregroundStyle(secondary) }
             }.padding(.top, 16)
             VStack(spacing: 6) {
                 ForEach(Array(Page.allCases.enumerated()), id: \.element) { index, destination in
@@ -99,9 +99,9 @@ struct Dashboard: View {
             }
             Spacer()
             VStack(alignment: .leading, spacing: 10) {
-                Image(systemName: "antenna.radiowaves.left.and.right").foregroundStyle(accent)
-                LT("Всегда рядом").font(.system(size: 13, weight: .semibold))
-                LT("Без облака, аккаунтов\nи общей сети Wi-Fi.").font(.system(size: 11)).foregroundStyle(secondary).lineSpacing(3)
+                Image(systemName: "menubar.rectangle").foregroundStyle(accent)
+                LT("В строке меню").font(.system(size: 13, weight: .semibold))
+                LT("Связь работает без окна. Открой его через значок наушников в строке меню.").font(.system(size: 11)).foregroundStyle(secondary).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 15))
             HStack(spacing: 8) { Circle().fill(model.trusted ? accent : warning).frame(width: 6, height: 6); LT(model.demo ? "Деморежим" : model.trusted ? "Устройства связаны" : "Телефон не подключён").font(.system(size: 11)); Spacer() }
                 .foregroundStyle(secondary)
@@ -252,7 +252,7 @@ struct Dashboard: View {
                 LT("Текущий системный выход: \(model.route)").font(.caption).foregroundStyle(secondary)
             }.padding(22).card(surface, line)
             VStack(alignment: .leading, spacing: 18) {
-                rowLabel("2. Свяжи Android с Mac", "Открой Seamless Headphones на телефоне и добавь ключ этого Mac.", icon: "link")
+                rowLabel("2. Свяжи Android с Mac", "Открой Sound Shift на телефоне и добавь ключ этого Mac.", icon: "link")
                 HStack { pill(model.link, icon: model.trusted ? "checkmark.shield" : "antenna.radiowaves.left.and.right", color: model.trusted ? accent : warning); Spacer() }
                 HStack {
                     if model.enabled { LButton(model.showPairing ? "Скрыть QR и ключ" : "Показать QR и ключ") { model.showPairing.toggle() }; LButton("Остановить связь", action: model.disable) }
@@ -275,7 +275,7 @@ struct Dashboard: View {
             VStack(alignment: .leading, spacing: 14) {
                 rowLabel("3. Разреши автоматизацию на телефоне", "Доступ к медиасессиям распознаёт Play/Pause. Состояние вызовов защищает разговоры. Настрой эти разрешения в приложении Android.", icon: "checklist")
                 HStack { pill(model.peer.available ? "Сигналы телефона доступны" : "Ожидаем настройку Android", icon: model.peer.available ? "checkmark" : "clock", color: model.peer.available ? accent : warning) }
-                LT("Подключение A2DP зависит от прошивки Android. При системном запрете Seamless покажет ошибку и приостановит автоматику.").font(.caption).foregroundStyle(secondary)
+                LT("Подключение A2DP зависит от прошивки Android. При системном запрете Sound Shift покажет ошибку и приостановит автоматику.").font(.caption).foregroundStyle(secondary)
             }.padding(22).card(surface, line)
         }
     }

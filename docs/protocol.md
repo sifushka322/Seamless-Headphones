@@ -71,3 +71,7 @@ Local callback-driven observations and one-shot debounce timers reduce detection
 Activity capability version 3 adds optional coordinator fields `idleOnly` and `owner`; missing fields mean unknown state. `mode` and `resumeAuto` requests carry a unique id. `controlResult` echoes the id with target `mode` or `resume` and a user-facing detail. For mode, device is `idle`, `follow`, or `rejected`; for resume, it is `accepted` or `rejected`. A client accepts only its matching pending reply and times out after 10 seconds. Selecting the current rule does not reset observation; changing it during a transfer is rejected.
 
 The user-facing connection method is fixed to parallel. Sequential remains a compatibility path for peers without capability version 2. Language changes affect presentation only; packet types, enum values, device identifiers, authentication and transaction IDs are unchanged.
+
+## Application version 0.6: Sound Shift
+
+The product display name is Sound Shift. The enrollment marker `app: "seamless-headphones"`, BLE UUIDs, wire format, bundle/package IDs, and pairing storage identifiers remain unchanged so renamed apps can update existing installations and pair with earlier compatible peers.

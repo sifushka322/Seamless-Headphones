@@ -25,6 +25,7 @@ import android.widget.*
 class MainActivity : ComponentActivity() {
     private val appearance by lazy { getSharedPreferences("appearance", MODE_PRIVATE) }
     private val settingsPrefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
+    private val appVersion by lazy { packageManager.getPackageInfo(packageName, 0).versionName.orEmpty() }
     private val dark get() = when (appearance.getString("theme", "system")) { "dark" -> true; "light" -> false; else -> resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES }
     private val ink get() = Color.parseColor(if (dark) "#EDF2F0" else "#1D2D2B")
     private val muted get() = Color.parseColor(if (dark) "#A1B0AC" else "#5C7169")
@@ -38,6 +39,9 @@ class MainActivity : ComponentActivity() {
     private var restoredScroll = 0
     private var pendingScrollOffset: Int? = null
     private var renderGeneration = 0
+    private var pendingBatterySuggestion = false
+    private var batteryStatus: TextView? = null
+    private var batteryAction: Button? = null
     private val pairingDraft by lazy { ViewModelProvider(this)[PairingDraft::class.java] }
     private var keyField: EditText? = null
     private var pairingStatus: TextView? = null
@@ -80,7 +84,7 @@ class MainActivity : ComponentActivity() {
     private val qrScanner = registerForActivityResult(ScanContract()) { result ->
         result.contents?.let { raw ->
             val code = runCatching { PairingCode.parse(raw) }.getOrNull()
-            if (code == null) toast("Это не QR-код связи Seamless Headphones")
+            if (code == null) toast("Это не QR-код связи Sound Shift")
             else confirmPairing(code)
         }
     }
@@ -174,6 +178,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState); page = (savedInstanceState?.getInt("page") ?: 0).coerceIn(0, 3)
         restoredScroll = savedInstanceState?.getInt("scroll") ?: 0
         pendingBluetoothAction = savedInstanceState?.getString("bluetoothAction")?.let { saved -> BluetoothAction.entries.firstOrNull { it.name == saved } }
+        pendingBatterySuggestion = savedInstanceState?.getBoolean("pendingBatterySuggestion") ?: false
         readPairingState()
         window.statusBarColor = canvas; window.navigationBarColor = canvas
         val root = stack().apply { setBackgroundColor(canvas) }
@@ -190,9 +195,18 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putInt("page", page); outState.putInt("scroll", pendingScrollOffset ?: scroll.scrollY)
         outState.putString("bluetoothAction", pendingBluetoothAction?.name)
+        outState.putBoolean("pendingBatterySuggestion", pendingBatterySuggestion)
         super.onSaveInstanceState(outState)
     }
-    override fun onResume() { super.onResume(); readPairingState(); if (bluetoothGranted()) bind(); if (::content.isInitialized) { if (page == 2) refreshDevices(); refresh() } }
+    override fun onResume() {
+        super.onResume(); readPairingState(); if (bluetoothGranted()) bind()
+        if (::content.isInitialized) { if (page == 2) refreshDevices(); refresh() }
+        if (pendingBatterySuggestion) window.decorView.post {
+            if (!isDestroyed && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                pendingBatterySuggestion = false; maybeSuggestBatteryExemption()
+            }
+        }
+    }
     private fun rerenderKeepingScroll() = render()
     private fun navigateTo(index: Int) {
         if (index == page) { scroll.scrollTo(0, 0); return }
@@ -207,6 +221,7 @@ class MainActivity : ComponentActivity() {
         val keySelection = keyField?.selectionStart ?: 0
         content.removeAllViews(); navigation.removeAllViews()
         keyField = null; pairingStatus = null; pairingExplanation = null; scanButton = null; saveKeyButton = null; forgetButton = null
+        batteryStatus = null; batteryAction = null
         setupCard = null; headsetTitle = null
         status = null; detail = null; autoStatus = null; mediaPermission = null; callPermission = null; logView = null; debugView = null; selectionView = null; matchButton = null; resumeButton = null; metrics = null; ownerText = null
         connect = null; toMac = null; toPhone = null; picker = null; holdSwitch = null
@@ -237,12 +252,12 @@ class MainActivity : ComponentActivity() {
                 contentDescription = title; setOnClickListener { navigateTo(index) }
             }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(1); marginEnd = dp(1) })
         }
-        content.addView(text("SEAMLESS  /  HEADPHONES", 11f, true).apply { letterSpacing = .16f; setTextColor(accent) }); gap(content, 16)
-        content.addView(text(listOf("Твой звук.\nТвои правила.", "Само. Но по\nтвоим правилам.", "Два устройства.\nОдна пара.", "Сделай\nSeamless своим.")[page], 28f, true)); gap(content, 8)
+        content.addView(text("SOUND  /  SHIFT", 11f, true).apply { letterSpacing = .16f; setTextColor(accent) }); gap(content, 16)
+        content.addView(text(listOf("Твой звук.\nТвои правила.", "Само. Но по\nтвоим правилам.", "Два устройства.\nОдна пара.", "Сделай\nSound Shift своим.")[page], 28f, true)); gap(content, 8)
         content.addView(text(listOf("Музыка продолжается. Устройства меняются.", "Разрешения, источники и защита от лишних передач.", "Настрой связь один раз. Дальше просто слушай.", "Оформление, связь и история событий.")[page], 13f, secondary = true)); gap(content, 24)
         content.addView(button("Скопировать диагностику") { copyDiagnostics() }); gap(content, 12)
         when (page) { 0 -> overview(); 1 -> automation(); 2 -> devicePage(); else -> settings() }
-        gap(content, 8); content.addView(text("0.5.1  ·  БЕЗ ОБЛАКА  ·  БЕЗ ТЕЛЕМЕТРИИ", 10f, secondary = true).apply { letterSpacing = .10f }); refresh()
+        gap(content, 8); content.addView(text("$appVersion  ·  БЕЗ ОБЛАКА  ·  БЕЗ ТЕЛЕМЕТРИИ", 10f, secondary = true).apply { letterSpacing = .10f }); refresh()
         if (editingKey) keyField?.let { it.requestFocus(); it.setSelection(keySelection.coerceIn(0, it.length())) }
         scroll.post { if (!isDestroyed && generation == renderGeneration) { scroll.scrollTo(0, offset); pendingScrollOffset = null } }
     }
@@ -393,7 +408,7 @@ class MainActivity : ComponentActivity() {
                     }.show()
             }; c.addView(forgetButton)
         }
-        card { c -> c.addView(text("Совместимость", 17f, true)); gap(c, 8); c.addView(text("Android может запрещать программное подключение A2DP. При отказе Seamless покажет причину и остановит автоматику. Первую передачу проверь со своей музыкой.", 13f, secondary = true)) }
+        card { c -> c.addView(text("Совместимость", 17f, true)); gap(c, 8); c.addView(text("Android может запрещать программное подключение A2DP. При отказе Sound Shift покажет причину и остановит автоматику. Первую передачу проверь со своей музыкой.", 13f, secondary = true)) }
         detail = text("", 12f, secondary = true); content.addView(detail)
     }
     private fun settings() {
@@ -425,6 +440,14 @@ class MainActivity : ComponentActivity() {
         }
         card { c -> toggle(c, "Восстанавливать связь", "Повторять поиск Mac после временного обрыва. Остановить можно в уведомлении.", service?.reconnect ?: settingsPrefs.getBoolean("reconnect", true)) { value -> service?.let { it.reconnect = value } ?: settingsPrefs.edit().putBoolean("reconnect", value).apply() } }
         card { c ->
+            c.addView(text("Работа в фоне", 17f, true)); gap(c, 8)
+            batteryStatus = text("", 13f, true).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }; c.addView(batteryStatus); gap(c, 8)
+            c.addView(text("Sound Shift поддерживает связь с Mac и следит за воспроизведением в фоне. Исключение из оптимизации батареи помогает Android не прерывать автоматические переключения, но может увеличить расход батареи.", 13f, secondary = true))
+            batteryAction = button("Разрешить работу без оптимизации") { openBatterySettings(requestExemption = BatteryAccess.isExempt(this) == false) }; c.addView(batteryAction)
+            c.addView(text("На некоторых телефонах также нужно разрешить автозапуск или выбрать «Без ограничений» в настройках батареи приложения. Ограничения производителя могут сохраняться.", 12f, secondary = true))
+            c.addView(button("Настройки приложения") { appSettings() })
+        }
+        card { c ->
             c.addView(text("История Android", 17f, true)); gap(c, 6); c.addView(text("События этого телефона. Ответы компьютера отмечены [Mac].", 12f, secondary = true)); gap(c, 12); logView = text("Событий пока нет", 11f, secondary = true).apply { typeface = Typeface.MONOSPACE; setTextIsSelectable(true) }; c.addView(ScrollView(this).apply { addView(logView) }, LinearLayout.LayoutParams(-1, dp(200)))
             c.addView(button("Скопировать журнал") { copyDiagnostics() })
             clearHistoryButton = button("Очистить историю") { service?.clearLogs(); refresh(); toast("История и технический журнал очищены") }; c.addView(clearHistoryButton)
@@ -440,8 +463,8 @@ class MainActivity : ComponentActivity() {
         card { c -> c.addView(text("Приватность по умолчанию", 17f, true)); gap(c, 8); c.addView(text("Без аккаунта и интернета. Ключ хранится в Android Keystore. Звук не записывается, содержимое уведомлений не читается. По BLE передаются только команды и состояния воспроизведения.", 13f, secondary = true)) }
     }
     private fun copyDiagnostics() {
-        val report = service?.diagnostics() ?: "Seamless Headphones 0.5.1 · Android ${Build.VERSION.RELEASE}\n${Build.MANUFACTURER} ${Build.MODEL}\nСервис ещё не запущен. Разрешение Bluetooth: ${bluetoothGranted()}"
-        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Seamless Headphones", L.text(this, report)))
+        val report = service?.diagnostics() ?: "Sound Shift $appVersion · Android ${Build.VERSION.RELEASE}\n${Build.MANUFACTURER} ${Build.MODEL}\nСервис ещё не запущен. Разрешение Bluetooth: ${bluetoothGranted()}"
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Sound Shift", L.text(this, report)))
         toast("Диагностика скопирована — вставь её в сообщение")
     }
     private fun readPairingState() {
@@ -495,6 +518,13 @@ class MainActivity : ComponentActivity() {
     }
     private fun refresh() {
         val s = service
+        val batteryExempt = BatteryAccess.isExempt(this)
+        updateText(batteryStatus, when (batteryExempt) {
+            true -> "✓  Исключение из оптимизации батареи включено"
+            false -> "Оптимизация батареи включена"
+            null -> "Не удалось проверить настройки батареи"
+        })
+        updateText(batteryAction, if (batteryExempt == false) "Разрешить работу без оптимизации" else "Настройки батареи")
         setupCard?.visibility = if (pairingState == PairingState.SAVED && !settingsPrefs.getString("headphones", "").isNullOrBlank()) View.GONE else View.VISIBLE
         headsetTitle?.text = selectedName()
         updateText(status, s?.status ?: if (bluetoothGranted()) "Запускаем сервис…" else "Нужно разрешение Bluetooth")
@@ -565,10 +595,25 @@ class MainActivity : ComponentActivity() {
         requestPermissions(arrayOf(Manifest.permission.READ_PHONE_STATE), 2)
     }
     private fun bluetoothGranted() = checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+    private fun maybeSuggestBatteryExemption() {
+        if (isFinishing || isDestroyed || !BatteryAccess.shouldSuggest(this)) return
+        if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) { pendingBatterySuggestion = true; return }
+        BatteryAccess.markSuggestionShown(this)
+        android.app.AlertDialog.Builder(this)
+            .setTitle(L.text(this, "Разрешить работу Sound Shift в фоне?"))
+            .setMessage(L.text(this, "Чтобы Android реже прерывал связь с Mac и автоматические переключения, разреши Sound Shift работать без оптимизации батареи. Это может увеличить расход батареи. Можно настроить позже в разделе «Настройки → Работа в фоне»."))
+            .setNegativeButton(L.text(this, "Позже"), null)
+            .setPositiveButton(L.text(this, "Разрешить")) { _, _ -> openBatterySettings(requestExemption = true) }
+            .show()
+    }
+    private fun openBatterySettings(requestExemption: Boolean) {
+        if (requestExemption) BatteryAccess.markSuggestionShown(this)
+        if (!BatteryAccess.openSettings(this, requestExemption)) toast("Этот раздел недоступен. Открой настройки приложения вручную")
+    }
     private fun performBluetoothAction(action: BluetoothAction) {
         if (!bound) bind()
         when (action) {
-            BluetoothAction.START_CONNECTION -> try { startForegroundService(Intent(this, ResponseService::class.java)); Unit }
+            BluetoothAction.START_CONNECTION -> try { startForegroundService(Intent(this, ResponseService::class.java)); maybeSuggestBatteryExemption() }
                 catch (_: SecurityException) { toast("Разреши «Устройства поблизости» в настройках приложения") }
                 catch (_: IllegalStateException) { toast("Не удалось запустить фоновую связь. Открой приложение и повтори подключение.") }
             BluetoothAction.REFRESH_DEVICES -> {

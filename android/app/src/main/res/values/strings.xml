@@ -1,3 +1,4 @@
 <resources>
-    <string name="media_service_label">Seamless Headphones — media access</string>
+    <string name="app_name" translatable="false">Sound Shift</string>
+    <string name="media_service_label">Sound Shift — media access</string>
 </resources>

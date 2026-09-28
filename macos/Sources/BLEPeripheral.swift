@@ -51,7 +51,7 @@ final class BLEPeripheral: NSObject, CBPeripheralManagerDelegate {
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         guard service === publishedService, secret != nil else { return }
         guard error == nil else { onStatus("Не удалось создать BLE-сервис", false); return }
-        peripheral.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [Self.serviceID], CBAdvertisementDataLocalNameKey: "Seamless Headphones"])
+        peripheral.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [Self.serviceID], CBAdvertisementDataLocalNameKey: "Sound Shift"])
         onStatus("Ожидаем телефон рядом", false)
     }
     func peripheralManager(_ peripheral: CBPeripheralManager, didStartAdvertising error: Error?) {

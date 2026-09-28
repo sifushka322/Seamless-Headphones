@@ -1,8 +1,8 @@
-# Seamless Headphones
+# Sound Shift
 
 Move your headphones between **Mac and Android**. Native Swift/SwiftUI and Kotlin apps coordinate over authenticated BLE, without accounts, a server, or a shared Wi-Fi network. Windows is not supported.
 
-**0.5.1 — Reliability and usability update.** The stable release channel uses parallel handoff, confirmed automation controls, clearer connection states, and Russian/English interfaces. Update both apps. See [audit and validation](docs/audit-0.5.1.md) for fixes, checks and limitations.
+**0.6.0 — Sound Shift.** A new name, a Mac menu-bar app without a Dock icon, and Android background battery settings. Update both apps. See [release validation](docs/validation-0.6.0.md) for checks and limitations; the [0.5.1 audit](docs/audit-0.5.1.md) documents the preceding reliability fixes.
 
 The release designation describes the selected software channel. The locally generated installers still use ad hoc signing on Mac and the existing Android debug certificate to preserve upgrade compatibility. They are not notarized or store-distributed production installers.
 
@@ -19,17 +19,18 @@ The release designation describes the selected software channel. The locally gen
 
 ## Setup
 
-1. **Mac:** macOS 14.2 or newer. The current DMG targets Apple Silicon. Move `Seamless Headphones.app` to Applications. The local build is ad hoc signed and not notarized.
+1. **Mac:** macOS 14.2 or newer. The current DMG targets Apple Silicon. Move `Sound Shift.app` to Applications. When upgrading, quit Seamless Headphones from its menu first, then remove the old app copy after installing Sound Shift to avoid running two coordinators. The app identity and pairing storage are retained; macOS may ask for Keychain access again. The local build is ad hoc signed and not notarized.
 2. **Android:** Android 12 or newer (API 31). Install the APK over the previous version to preserve settings and pairing.
 3. Pair the headphones with both operating systems. Select the same Bluetooth address in both apps under Devices; matching names alone are insufficient.
 4. Enable the link on Mac and show its QR code. On Android, scan the QR under Devices, confirm the key, and find the Mac. Manual key entry is also available. Grant Nearby Devices/Bluetooth and notification permissions; the camera is only used for QR scanning.
 5. Under Automation on Android, enable notification access for the media-session API and allow phone-state access for call protection. The app does not read notification contents, phone numbers, contacts, or call history.
-6. Test manual handoff in both directions and check your player's audio. Some Android firmware denies A2DP control; the app does not bypass that restriction.
-7. Enable automation on both devices. Once ready, pause and **start playback again** on the receiving device. Existing playback and starts during cooldown are not queued for a later takeover.
+6. Android offers an optional background-work explanation the first time you start connecting. Choose **Allow**, then approve the system battery request. You can skip it and return later under **Settings → Background operation**. The page shows the actual system status. On phones with additional manufacturer restrictions, also allow background use in the app’s system battery settings.
+7. Test manual handoff in both directions and check your player's audio. Some Android firmware denies A2DP control; the app does not bypass that restriction.
+8. Enable automation on both devices. Once ready, pause and **start playback again** on the receiving device. Existing playback and starts during cooldown are not queued for a later takeover.
 
 Settings includes Language and Appearance. System language uses Russian for a Russian system preference and English otherwise. Device and player names remain unchanged.
 
-Closing the Mac window leaves the menu-bar app running. Android uses a foreground service with a stop action. Starting a link is explicit after app restart. Android retries a temporary failure up to eight times; a new manual search starts a fresh retry budget.
+Sound Shift lives in the Mac menu bar and has no Dock icon. Closing the window (including ⌘W) hides it while the link continues. Click the headphones icon and choose Open to return; choose Quit to stop the app. Android uses a foreground service with a stop action. Battery exemption helps background reliability but does not prevent force-stop or every manufacturer restriction. Starting a link is explicit after app restart. Android retries a temporary failure up to eight times; a new manual search starts a fresh retry budget.
 
 ## Controls and diagnostics
 
@@ -57,6 +58,8 @@ Mac requires Command Line Tools and a modern installed macOS SDK:
 
 ```sh
 bash scripts/test-macos.sh
+# With a logged-in Mac desktop; uses isolated demo mode:
+bash scripts/test-macos-menubar.sh
 bash scripts/build-macos.sh --dmg
 ```
 
@@ -82,4 +85,5 @@ cd android
 | `localization` | Shared translations of user-facing state and errors |
 | `protocol/vectors.json` | Shared protocol vectors with synthetic keys |
 | [Protocol](docs/protocol.md) | Authentication, messages, transactions, stale-event protection |
-| [Audit and validation](docs/audit-0.5.1.md) | Current fixes, verification, hardware limitations |
+| [Release validation](docs/validation-0.6.0.md) | Current checks, update compatibility, hardware limitations |
+| [Reliability audit](docs/audit-0.5.1.md) | Previous full-stack audit and fixes |

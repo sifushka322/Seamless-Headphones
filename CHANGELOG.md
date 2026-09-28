@@ -1,3 +1,11 @@
+# 0.6.0 — Sound Shift
+
+- Rename the app, notifications, diagnostics, and installers to Sound Shift while preserving pairing, app identities, settings, and protocol compatibility.
+- Run Mac as a menu-bar app without a Dock icon; close/⌘W hides the window, Open restores it, and Quit stops the app.
+- Add an optional first-connection explanation and Android system request for background battery exemption, with current status and a retry action in Settings.
+- Refresh battery status after returning from system settings; support cancellation and settings fallback without blocking pairing.
+- See [release validation](docs/validation-0.6.0.md) for checks and update instructions.
+
 # 0.5.1 — Reliability and usability audit
 
 - Harden BLE session invalidation, callback ownership, packet validation and the Android notification-subscription handshake.

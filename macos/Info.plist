@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>SeamlessHeadphones</string>
+<key>CFBundleExecutable</key><string>SoundShift</string>
 <key>CFBundleIdentifier</key><string>app.systemresponse.mac</string>
-<key>CFBundleName</key><string>Seamless Headphones</string>
-<key>CFBundleDisplayName</key><string>Seamless Headphones</string>
+<key>CFBundleName</key><string>Sound Shift</string>
+<key>CFBundleDisplayName</key><string>Sound Shift</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
-<key>CFBundleShortVersionString</key><string>0.5.1</string>
-<key>CFBundleVersion</key><string>8</string>
+<key>CFBundleShortVersionString</key><string>0.6.0</string>
+<key>CFBundleVersion</key><string>9</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSMinimumSystemVersion</key><string>14.2</string>
+<key>LSUIElement</key><true/>
 <key>NSBluetoothAlwaysUsageDescription</key><string>Связь с твоим Android по Bluetooth для передачи наушников между устройствами.</string>
 <key>NSBluetoothPeripheralUsageDescription</key><string>Передача команд твоему Android по BLE без интернета.</string>
 <key>NSHighResolutionCapable</key><true/>

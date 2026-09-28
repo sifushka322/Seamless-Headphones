@@ -22,7 +22,7 @@ class PairingScannerActivity : CaptureActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(16), dp(20), dp(16)); setBackgroundColor(0xDD101517.toInt())
             addView(TextView(this@PairingScannerActivity).apply {
-                text = L.text(this@PairingScannerActivity, "Наведи камеру на QR-код в Seamless на Mac"); textSize = 18f; setTextColor(Color.WHITE)
+                text = L.text(this@PairingScannerActivity, "Наведи камеру на QR-код в Sound Shift на Mac"); textSize = 18f; setTextColor(Color.WHITE)
             })
             addView(Button(this@PairingScannerActivity).apply {
                 text = L.text(this@PairingScannerActivity, "Закрыть сканер"); isAllCaps = false

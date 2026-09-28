@@ -115,7 +115,7 @@ class ResponseService : Service() {
         while (debugEvents.size > 1000) debugEvents.removeLast()
     }
     fun clearLogs() { events.clear(); debugEvents.clear(); changed?.invoke() }
-    fun diagnostics(): String = "Seamless Headphones ${packageManager.getPackageInfo(packageName, 0).versionName} · Android\nAndroid ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}\n${Build.MANUFACTURER} ${Build.MODEL}\nBLE: $status\nАвто: $autoReason\n$selectionSummary\nТранзакция: ${transaction?.id ?: "нет"} · ${transaction?.stage ?: if (requestAt > 0) "ожидаем Mac" else "нет"}\nАудиоадаптер: ${headphones.diagnostics(address)}\nСостояние Android: ${local.json()}\nСостояние Mac: ${peer.json()} ageMs=${if (remoteAt > 0) SystemClock.elapsedRealtime() - remoteAt else -1}\nЗащита Android: $voiceDiagnostics\nАктивные источники: $observedSources\nРазрешены: ${allowed.sorted().joinToString()}\nРазрешения: media=$mediaAvailable calls=$callKnown\nАвто: enabled=$autoEnabled delayMs=$detectionDelay fastDetection=$fastDetection\nТехнические логи: $debugEnabled\n\nИстория этого Android (источник в скобках):\n" + events.reversed().joinToString("\n") + "\n\nТехнический журнал Android:\n" + debugEvents.reversed().joinToString("\n")
+    fun diagnostics(): String = "Sound Shift ${packageManager.getPackageInfo(packageName, 0).versionName} · Android\nAndroid ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}\n${Build.MANUFACTURER} ${Build.MODEL}\nBLE: $status\nАвто: $autoReason\n$selectionSummary\nТранзакция: ${transaction?.id ?: "нет"} · ${transaction?.stage ?: if (requestAt > 0) "ожидаем Mac" else "нет"}\nАудиоадаптер: ${headphones.diagnostics(address)}\nСостояние Android: ${local.json()}\nСостояние Mac: ${peer.json()} ageMs=${if (remoteAt > 0) SystemClock.elapsedRealtime() - remoteAt else -1}\nЗащита Android: $voiceDiagnostics\nАктивные источники: $observedSources\nРазрешены: ${allowed.sorted().joinToString()}\nРазрешения: media=$mediaAvailable calls=$callKnown\nАвто: enabled=$autoEnabled delayMs=$detectionDelay fastDetection=$fastDetection\nТехнические логи: $debugEnabled\n\nИстория этого Android (источник в скобках):\n" + events.reversed().joinToString("\n") + "\n\nТехнический журнал Android:\n" + debugEvents.reversed().joinToString("\n")
     val events = ArrayDeque<String>()
     var changed: (() -> Unit)? = null
     private data class Transaction(val id: String, val target: String, val address: String, val automatic: Boolean, val started: Long = SystemClock.elapsedRealtime(), val commands: HandoffCommands = HandoffCommands(target)) { val stage get() = commands.stage }
@@ -152,7 +152,7 @@ class ResponseService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, ResponseService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return Notification.Builder(this, "connection").setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentTitle("Seamless Headphones").setContentText(L.text(this, text)).setContentIntent(open).setOngoing(true)
+            .setContentTitle("Sound Shift").setContentText(L.text(this, text)).setContentIntent(open).setOngoing(true)
             .addAction(Notification.Action.Builder(null, L.text(this, "Остановить"), stop).build()).build()
     }
     fun paired() = try { headphones.paired() } catch (_: SecurityException) { emptyList() }

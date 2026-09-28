@@ -56,7 +56,7 @@ class InterfaceTest {
             scenario.onActivity { activity ->
                 val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
                 val report = clipboard.primaryClip!!.getItemAt(0).coerceToText(activity).toString()
-                org.junit.Assert.assertTrue(report.contains("Seamless Headphones"))
+                org.junit.Assert.assertTrue(report.contains("Sound Shift"))
                 org.junit.Assert.assertTrue(report.contains("Android"))
             }
             // Android's clipboard preview overlays the bottom navigation outside Espresso's view tree.
@@ -70,7 +70,7 @@ class InterfaceTest {
         ActivityScenario.launch(MainActivity::class.java).use {
             onView(withContentDescription("Устройства")).perform(click())
             onView(withText("Сканировать QR с Mac")).perform(scrollTo(), click())
-            onView(withText("Наведи камеру на QR-код в Seamless на Mac")).check(matches(isDisplayed()))
+            onView(withText("Наведи камеру на QR-код в Sound Shift на Mac")).check(matches(isDisplayed()))
             capture("android-scanner")
             pressBack()
             onView(withText("Сканировать QR с Mac")).check(matches(isDisplayed()))
@@ -179,7 +179,7 @@ class InterfaceTest {
             onView(withText("Delete Mac pairing key?")).check(matches(isDisplayed()))
             onView(withText("Cancel")).perform(click())
             onView(withText("Scan QR code from Mac")).perform(scrollTo(), click())
-            onView(withText("Point the camera at the QR code in Seamless on your Mac")).check(matches(isDisplayed()))
+            onView(withText("Point the camera at the QR code in Sound Shift on your Mac")).check(matches(isDisplayed()))
             onView(withText("Close scanner")).perform(click())
             onView(withContentDescription("Settings")).perform(click())
             onView(withTagValue(org.hamcrest.Matchers.`is`("language-system"))).perform(scrollTo(), click())
@@ -250,11 +250,11 @@ class InterfaceTest {
         org.junit.Assert.assertFalse(noSelection, Regex("[А-Яа-яЁё]").containsMatchIn(noSelection))
         org.junit.Assert.assertEquals("Waiting after transfer · 11 s", L.text(ctx, "Пауза после переключения · 11 с"))
         org.junit.Assert.assertEquals("17:10:00 [Android] TX type=activity tx= id=123", L.text(ctx, "17:10:00 [Android] TX type=activity tx= id=123"))
-        val report = L.text(ctx, "Seamless Headphones\nАвто: Пауза после переключения · 11 с\n\n17:10:00 [Mac] Звук на Mac · 2.4 с")
+        val report = L.text(ctx, "Sound Shift\nАвто: Пауза после переключения · 11 с\n\n17:10:00 [Mac] Звук на Mac · 2.4 с")
         org.junit.Assert.assertFalse(report, Regex("[А-Яа-яЁё]").containsMatchIn(report))
-        val disconnectedReport = L.text(ctx, "Seamless Headphones\nBLE: Связь выключена\nAndroid: Не выбраны [не выбраны]\nMac: ожидаем сведения [неизвестно]\nАвто: Ожидаем связь с Mac")
+        val disconnectedReport = L.text(ctx, "Sound Shift\nBLE: Связь выключена\nAndroid: Не выбраны [не выбраны]\nMac: ожидаем сведения [неизвестно]\nАвто: Ожидаем связь с Mac")
         org.junit.Assert.assertFalse(disconnectedReport, Regex("[А-Яа-яЁё]").containsMatchIn(disconnectedReport))
-        val namedReport = L.text(ctx, "Seamless Headphones\nBLE: Связь выключена\nMac: Музыка [AA:BB:CC:DD:EE:FF]\nAndroid: Мои наушники [AA:BB:CC:DD:EE:FF]")
+        val namedReport = L.text(ctx, "Sound Shift\nBLE: Связь выключена\nMac: Музыка [AA:BB:CC:DD:EE:FF]\nAndroid: Мои наушники [AA:BB:CC:DD:EE:FF]")
         org.junit.Assert.assertTrue(namedReport, namedReport.contains("Mac: Музыка [AA:BB:CC:DD:EE:FF]"))
         org.junit.Assert.assertTrue(namedReport, namedReport.contains("Android: Мои наушники [AA:BB:CC:DD:EE:FF]"))
         ctx.getSharedPreferences("appearance", Context.MODE_PRIVATE).edit().putString("language", "ru").commit()

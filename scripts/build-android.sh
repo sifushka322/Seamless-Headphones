@@ -21,5 +21,5 @@ fi
 VERSION="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' android/app/build.gradle.kts)"
 [[ -n "$VERSION" ]] || { echo "Cannot read Android versionName" >&2; exit 1; }
 mkdir -p dist
-cp android/app/build/outputs/apk/debug/app-debug.apk "dist/SeamlessHeadphones-$VERSION-android.apk"
-echo "Built: $ROOT/dist/SeamlessHeadphones-$VERSION-android.apk (debug signing)"
+cp android/app/build/outputs/apk/debug/app-debug.apk "dist/SoundShift-$VERSION-android.apk"
+echo "Built: $ROOT/dist/SoundShift-$VERSION-android.apk (debug signing)"
